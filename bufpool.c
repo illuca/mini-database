@@ -51,6 +51,8 @@ BufPool initBufPool(int nbufs, char* strategy)
     for (i = 0; i < nbufs; i++) {
         bp->bufs[i].id[0] = '\0';
         bp->bufs[i].pin = 0;
+        bp->bufs[i].page_index = -1;
+        bp->bufs[i].page_id = -1;
         bp->bufs[i].page = NULL;
         //一开始全都空闲,所以应该把0-nbufs-1都放进freeList
         bp->freeList[i] = i;

@@ -24,6 +24,7 @@ typedef struct bufPool {
 typedef struct buffer {
     char id[MAXID];
     int pin;
+    int usage;
     UINT oid;
     int page_index;
     UINT64 page_id;
