@@ -76,15 +76,17 @@ static unsigned int clock = 0;
 
 int pageInPool(BufPool pool, UINT oid, int page_index)
 {
-    int i;
-    for (i = 0; i < pool->nbufs; i++) {
+    int slot = -1;
+
+    for (int i = 0; i < pool->nbufs; i++) {
         buffer b = pool->bufs[i];
         if (b.oid == oid && b.page_index == page_index) {
             //返回包含这个page的buffer的index
-            return i;
+            slot = i;
+            break;
         }
     }
-    return -1;
+    return slot;
 }
 
 // removeFirstFree(pool)
@@ -110,7 +112,6 @@ int removeFirstFree(BufPool pool)
 // - search for a slot in the usedList and remove it
 // - depends on how usedList managed, so is strategy-dependent
 
-static
 void removeFromUsedList(BufPool pool, int slot)
 {
     int i, j;
@@ -201,9 +202,34 @@ void makeAvailable(BufPool pool, int slot)
 }
 
 
+int store_page_in_pool(BufPool pool, Table* t, int page_index, char* page) {
+    // page_id is not in pool
+    int slot;
+    if (pool->nfree > 0) {
+        // 如果有空余，先把所有的freeList位置用完，如果还不够再用替换算法，例如LRU之类的
+        slot = removeFirstFree(pool);
+    }
+    else {
+        // 如果buffer没有空余
+        slot = grabNextSlot(pool);
+    }
+    pool->nreads++;
+    UINT64 page_id;
+    memcpy(&page_id, page, sizeof(UINT64));
+    sprintf(pool->bufs[slot].id, "%u-%llu", t->oid, page_id);
+    //TODO 注意之后removeFromUsedList要free
+    pool->bufs[slot].pin = 0;
+    pool->bufs[slot].oid = t->oid;
+    pool->bufs[slot].table = t;
+    pool->bufs[slot].page_index = page_index;
+    pool->bufs[slot].page_id = page_id;
+    pool->bufs[slot].page = page;
+    return slot;
+}
 
-
-int request_page(BufPool pool, UINT oid, int page_index, char* page)
+// page!=NULL是存储
+// page=NULL是从buffer中读
+int request_page_in_pool(BufPool pool, UINT oid, int page_index, char* page)
 {
     UINT64 page_id;
     memcpy(&page_id, page, sizeof(UINT64));
@@ -238,12 +264,6 @@ int request_page(BufPool pool, UINT oid, int page_index, char* page)
         pool->bufs[slot].page_id = page_id;
         pool->bufs[slot].page = page;
     }
-    //TODO：所以pin是什么？
-    // have a slot
-    pool->bufs[slot].pin++;
-    removeFromUsedList(pool,slot);
-    showPoolState(pool);  // for debugging
-    return slot;
 }
 
 void release_page(BufPool pool, UINT oid, int page)

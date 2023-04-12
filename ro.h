@@ -5,6 +5,8 @@
 void init();
 void release();
 
+UINT64 get_page_id(char* page);
+
 // equality test for one attribute
 // idx: index of the attribute for comparison, 0 <= idx < nattrs
 // cond_val: the compared value

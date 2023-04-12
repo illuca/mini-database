@@ -26,6 +26,7 @@ typedef struct buffer {
     int pin;
     int usage;
     UINT oid;
+    Table* table;
     int page_index;
     UINT64 page_id;
     char* page;
@@ -35,9 +36,13 @@ typedef struct bufPool* BufPool;
 
 BufPool initBufPool(int, char*);
 
-int request_page(BufPool, UINT oid, int page_index, char* page);
+int request_page_in_pool(BufPool pool, UINT oid, int page_index, char* page);
 
 void release_page(BufPool, UINT oid, int);
+
+int store_page_in_pool(BufPool pool, Table* table, int page_index, char* page);
+
+void removeFromUsedList(BufPool pool, int slot);
 
 void showPoolUsage(BufPool);
 

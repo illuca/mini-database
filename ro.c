@@ -56,8 +56,8 @@ UINT64 get_page_id(char* page) {
     return page_id;
 }
 
-UINT get_tuple_size(UINT nattrs) {
-    return nattrs * sizeof(INT);
+UINT get_tuple_size(Table* t) {
+    return t->nattrs * sizeof(INT);
 }
 
 void write_tuples_from_page(Tuple* result, char* page, INT tuple_size, INT ntuples_per_page) {
@@ -85,71 +85,87 @@ Tuple* get_tuples_from_page(char* page, INT tuple_size, INT ntuples_per_page) {
 
 
 
-INT get_ntuples_per_page(UINT nattrs) {
-    return (get_conf()->page_size - sizeof(UINT64)) / sizeof(INT) / nattrs;
+INT get_ntuples_per_page(Table* t) {
+    return (get_conf()->page_size - sizeof(UINT64)) / sizeof(INT) / t->nattrs;
 }
 
-INT get_page_num(UINT ntuples, INT nattrs) {
-    INT ntuples_per_page = get_ntuples_per_page(nattrs);
-    return ceil(ntuples / (double) ntuples_per_page);
-}
-
-Tuple* get_tuples(Table* t) {
-    Database* db = get_db();
-    Conf* cf = get_conf();
-    Tuple* result = (Tuple*) malloc(sizeof(Tuple) * t->ntuples);
-
-    char* table_path = (char*) malloc(sizeof(char) * 100);
-    sprintf(table_path, "%s/%u", db->path, t->oid);
-    FILE* table_fp = fopen(table_path, "r");
-    log_open_file(t->oid);
-    if (table_fp == NULL) {
-        printf("Table %s data cannot be found.\n", t->name);
-        return NULL;
-    }
-
-    UINT page_size = cf->page_size;
-    INT ntuples_per_page = get_ntuples_per_page(t->nattrs);
-    int page_num = get_page_num(t->ntuples, t->nattrs);
-    int tuple_in_last_page = t->ntuples - (page_num - 1) * ntuples_per_page;
-    int result_idx = 0;
-    int page_index = 0;
-    BufPool bp = get_bp();
-    while (1) {
-        char* page = NULL;
-        int slot = pageInPool(bp, t->oid, page_index);
-        if (slot >= 0) {
-            page = bp->bufs[slot].page;
-            page_index++;
-            //read page to result
-        } else {
-            page = (char*) malloc(page_size);
-            fread(page, page_size, 1, table_fp);
-            request_page(bp, t->oid, page_index, page);
-            page_index++;
-            log_read_page(get_page_id(page));
-        }
-        UINT64 page_id = get_page_id(page);
-        printf("Request %u-%llu\n", t->oid, page_id);
-
-        if (page_index != page_num) {
-            write_tuples_from_page(result + result_idx, page, get_tuple_size(t->nattrs), ntuples_per_page);
-            result_idx += ntuples_per_page;
-        } else if (page_index == page_num) {
-            write_tuples_from_page(result + result_idx, page, get_tuple_size(t->nattrs), tuple_in_last_page);
-            break;
-        }
-    }
-    free(table_path);
-    fclose(table_fp);
-    log_close_file(t->oid);
-    return result;
+INT get_page_num(Table* t) {
+    INT ntuples_per_page = get_ntuples_per_page(t);
+    return ceil(t->ntuples / (double) ntuples_per_page);
 }
 
 void print_tuples(Tuple* tuples, int length, UINT nattrs) {
     for (int i = 0; i < length; i++) {
         print_tuple(tuples[i], nattrs);
     }
+}
+
+int ntuples(buffer* p) {
+    Table* t = p->table;
+    int ntuples_per_page = get_ntuples_per_page(t);
+    int page_num = get_page_num(t);
+    int tuple_in_last_page = t->ntuples - (page_num - 1) * ntuples_per_page;
+    if (p->page_index < page_num - 1) {
+        return ntuples_per_page;
+    } else {
+        return tuple_in_last_page;
+    }
+}
+
+Tuple get_tuple(buffer* p, int tid) {
+    Table* t = p->table;
+    char* page = p->page;
+    Tuple result = (Tuple) malloc(sizeof(Tuple));
+    UINT tuple_size = get_tuple_size(t);
+    memcpy(result, page + sizeof(UINT64) + tid * tuple_size, tuple_size);
+    return result;
+}
+
+buffer* get_page_hash_join(FILE* fp, Table* t, int page_index) {
+    INT page_size = get_conf()->page_size;
+    char* page = (char*) malloc(page_size);
+    fseek(fp, page_index * page_size, SEEK_SET);
+    fread(page, page_size, 1, fp);
+    log_read_page(get_page_id(page));
+    BufPool bp = get_bp();
+    buffer* result = (buffer*) malloc(sizeof(buffer));
+    result->page = page;
+    result->table = t;
+    result->oid = t->oid;
+    result->page_index = page_index;
+    return result;
+}
+
+buffer* get_page(FILE* fp, Table* t, int page_index) {
+    BufPool pool = get_bp();
+    int slot = pageInPool(pool, t->oid, page_index);
+    pool->nrequests++;
+
+    if (slot >= 0) {
+        pool->nhits++;
+    } else {
+        INT page_size = get_conf()->page_size;
+        char* page = (char*) malloc(page_size);
+        fseek(fp, page_index * page_size, SEEK_SET);
+        fread(page, page_size, 1, fp);
+        log_read_page(get_page_id(page));
+        slot = store_page_in_pool(pool, t, page_index, page);
+    }
+    //TODO：所以pin是什么？
+    pool->bufs[slot].pin++;
+    removeFromUsedList(pool, slot);
+    showPoolState(pool);  // for debugging
+
+    return &pool->bufs[slot];
+}
+
+FILE* get_table_fp(char* table_name) {
+    Database * db = get_db();
+    Table* t = get_table(table_name);
+    char* table_path = (char*) malloc(sizeof(char) * 100);
+    sprintf(table_path, "%s/%u", db->path, t->oid);
+    FILE* result = fopen(table_path, "r");
+    return result;
 }
 
 // invoke log_open_file() every time a page is read from the hard drive.
@@ -166,19 +182,29 @@ _Table* sel(const UINT idx, const INT cond_val, const char* table_name) {
         printf("Table %s does not exist.\n", table_name);
         return NULL;
     }
+    FILE* input = get_table_fp(table_name);
+    log_open_file(t->oid);
+    if (input == NULL) {
+        printf("Table %s data cannot be found.\n", t->name);
+        return NULL;
+    }
 
-    Tuple* tuples = get_tuples(t);
-
+    INT total_page = get_page_num(t);
     int counter = 0;
-    for (int i = 0; i < t->ntuples; i++) {
-        if (tuples[i][idx] == cond_val) {
-            result->tuples[counter++] = tuples[i];
-            print_tuple(tuples[i], t->nattrs);
+    for (int page_idx = 0; page_idx < total_page; page_idx++) {
+        buffer* ibuf_p = get_page(input, t, page_idx);
+
+        for(int tid = 0; tid < ntuples(ibuf_p); tid++) {
+            Tuple tuple = get_tuple(ibuf_p, tid);
+            if(tuple[idx] == cond_val) {
+                result->tuples[counter++] = tuple;
+            }
         }
     }
     result->ntuples = counter;
     result->nattrs = t->nattrs;
-
+    fclose(input);
+    log_close_file(t->oid);
     return result;
 }
 
@@ -186,6 +212,105 @@ char* get_pages(Table* t) {
     return NULL;
 }
 
+int hash_function(int key, int table_size) {
+    return key % table_size;
+}
+
+void add_tuple(char* page, int tid, Tuple tuple, Table * t) {
+    UINT tuple_size = get_tuple_size(t);
+    memcpy(page + tid * tuple_size, tuple, tuple_size);
+}
+
+_Table* simple_hash_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Table* t2) {
+    _Table* result = malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
+    BufPool bp = get_bp();
+    buffer* buffers = bp->bufs;
+    int buffer_size = get_conf()->buf_slots;
+    int buffer_count[buffer_size];
+    INT t1_total_page = get_page_num(t1), t2_total_page = get_page_num(t2);
+    UINT t1_size = get_tuple_size(t1), t2_size = get_tuple_size(t2);
+
+    //TODO 注意这里是指定了t1为outer，但是实际应该进行比较的，到时候就对换就行，t1和t2互换指针
+    int MAX_BUFFER_SIZE = get_conf()->page_size / sizeof(INT) / t1->nattrs;
+
+    for (int i = 0; i < buffer_size; i++) {
+        buffers[i].page = (char*) malloc(MAX_BUFFER_SIZE * t1_size);
+        buffer_count[i] = 0;
+    }
+
+    int counter=0;
+    for(int t1_pdx=0; t1_pdx < t1_total_page; t1_pdx++) {
+        buffer* t1_ibuf_p = get_page_hash_join(fp1, t1, t1_pdx);
+        for(int t1_tid = 0; t1_tid < ntuples(t1_ibuf_p); t1_tid++) {
+            Tuple r = get_tuple(t1_ibuf_p, t1_tid);
+            int index = hash_function(r[idx1], buffer_size);
+
+            if (buffer_count[index] == MAX_BUFFER_SIZE) {
+                for(int t2_pdx=0; t2_pdx < t2_total_page; t2_pdx++) {
+                    buffer* t2_ibuf_p = get_page_hash_join(fp2, t2, t2_pdx);
+                    for(int t2_tid = 0; t2_tid < ntuples(t2_ibuf_p); t2_tid++) {
+                        Tuple s = get_tuple(t2_ibuf_p, t2_tid);
+                        int s_index = hash_function(s[idx2], buffer_size);
+
+                        for (int k = 0; k < buffer_count[s_index]; k++) {
+                            Tuple rr = (Tuple) malloc(t1_size);
+                            memcpy(rr, buffers[s_index].page + k* get_tuple_size(t1), get_tuple_size(t1));
+                            if (rr[idx1] == s[idx2]) {
+                                printf("Match found: (%d, %d), (%d, %d)\n", idx1, rr[idx1], idx2, s[idx2]);
+                                Tuple new_tuple = malloc(t1_size + t2_size);
+                                memcpy(new_tuple, r, t1_size);
+                                memcpy(new_tuple + t1->nattrs, s, t2_size);
+                                print_tuple(new_tuple, t1->nattrs + t2->nattrs);
+                                result->tuples[counter++] = new_tuple;
+                                counter++;
+                            }
+                        }
+                    }
+                }
+                // clear buffer
+                for (int i = 0; i < buffer_size; i++) {
+                    buffer_count[i] = 0;
+                }
+            }
+            add_tuple(buffers[index].page, buffer_count[index], r, t1);
+            buffer_count[index]++;
+        }
+//        for (int i = 0; i < buffer_size; i++) {
+//            free(buffers[i].page);
+//        }
+    }
+    return result;
+}
+
+_Table* nested_for_loop_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Table* t2) {
+    _Table* result = malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
+    int counter = 0;
+    INT t1_size = get_tuple_size(t1), t2_size = get_tuple_size(t2);
+    INT t1_total_page = get_page_num(t1), t2_total_page = get_page_num(t2);
+    for(int t1_pdx=0; t1_pdx < t1_total_page; t1_pdx++) {
+        buffer* t1_ibuf_p = get_page(fp1, t1, t1_pdx);
+        for(int t2_pdx=0; t2_pdx < t2_total_page; t2_pdx++) {
+            buffer* t2_ibuf_p = get_page(fp2, t2, t2_pdx);
+            for(int t1_tid = 0; t1_tid < ntuples(t1_ibuf_p); t1_tid++) {
+                for(int t2_tid = 0; t2_tid < ntuples(t2_ibuf_p); t2_tid++) {
+                    Tuple r = get_tuple(t1_ibuf_p, t1_tid);
+                    Tuple s = get_tuple(t2_ibuf_p, t2_tid);
+                    if (r[idx1] == s[idx2]) {
+                        Tuple new_tuple = malloc(t1_size + t2_size);
+                        memcpy(new_tuple, r, t1_size);
+                        memcpy(new_tuple + t1->nattrs, s, t2_size);
+                        print_tuple(new_tuple, t1->nattrs + t2->nattrs);
+                        result->tuples[counter++] = new_tuple;
+                    }
+                }
+            }
+        }
+    }
+    result->ntuples = counter;
+    result->nattrs = t1->nattrs + t2->nattrs;
+    result->ntuples = counter;
+    return result;
+}
 
 // write your code to join two tables
 // invoke log_read_page() every time a page is read from the hard drive.
@@ -197,44 +322,19 @@ _Table* join(const UINT idx1, const char* table1_name, const UINT idx2, const ch
     printf("join() is invoked.\n");
     Table* t1 = get_table(table1_name);
     Table* t2 = get_table(table2_name);
-    _Table* result = malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
 
-    char* pages1 = get_pages(t1);
-    char* pages2 = get_pages(t2);
-    INT page_num1 = get_page_num(t1->ntuples, t1->nattrs);
-    for(int i = 0; i < page_num1; i++) {
+    _Table* result = NULL;
 
+    FILE* fp1 = get_table_fp(table1_name);
+    FILE* fp2 = get_table_fp(table2_name);
+
+    INT t1_total_page = get_page_num(t1);
+    INT t2_total_page = get_page_num(t2);
+
+    if (get_conf()->buf_slots < t1_total_page + t2_total_page) {
+        result = nested_for_loop_join(idx1, idx2, fp1, fp2, t1, t2);
+    } else {
+        result = simple_hash_join(idx1, idx2, fp1, fp2, t1, t2);
     }
-
-    Tuple* tuples1 = get_tuples(t1);
-    Tuple* tuples2 = get_tuples(t2);
-
-    printf("----\n");
-    print_tuples(tuples1, t1->ntuples, t1->nattrs);
-    printf("----\n");
-    print_tuples(tuples2, t2->ntuples, t2->nattrs);
-    printf("----\n");
-    int counter = 0;
-    for(int i = 0; i < t1->ntuples; i++) {
-        for(int j=0;j<t2->ntuples;j++) {
-            if(tuples1[i][idx1] == tuples2[j][idx2]) {
-                INT t1_size = get_tuple_size(t1->nattrs);
-                INT t2_size = get_tuple_size(t2->nattrs);
-                Tuple tmp = malloc(t1_size + t2_size);
-                print_table_tuple(tuples1[i], t1);
-                print_table_tuple(tuples2[j], t2);
-
-                memcpy(tmp, tuples1[i], t1_size);
-                memcpy(tmp + t1->nattrs, tuples2[j], t2_size);
-                print_tuple(tmp, t1->nattrs + t2->nattrs);
-                result->tuples[counter++] = tmp;
-            }
-        }
-    }
-    result->ntuples = counter;
-    result->nattrs = t1->nattrs + t2->nattrs;
-
-//    print_tuples(tuples1, t1->ntuples, t1->nattrs);
-//    print_tuples(tuples2, t2->ntuples, t2->nattrs);
     return result;
 }
