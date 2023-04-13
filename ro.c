@@ -221,10 +221,17 @@ void add_tuple(char* page, int tid, Tuple tuple, Table * t) {
     memcpy(page + tid * tuple_size, tuple, tuple_size);
 }
 
+Tuple join_tuple(Tuple tuple1, Tuple tuple2, Table* t1, Table* t2) {
+    UINT t1_size = get_tuple_size(t1), t2_size = get_tuple_size(t2);
+    Tuple result = (Tuple) malloc(t1_size + t2_size);
+    memcpy(result, tuple1, t1_size);
+    memcpy(result + t1->nattrs, tuple2, t2_size);
+    return result;
+}
+
 _Table* simple_hash_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Table* t2) {
-    _Table* result = malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
-    BufPool bp = get_bp();
-    buffer* buffers = bp->bufs;
+    _Table* result = (_Table*) malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
+    buffer* buffers = (buffer*) malloc(sizeof(buffer));
     int buffer_size = get_conf()->buf_slots;
     int buffer_count[buffer_size];
     INT t1_total_page = get_page_num(t1), t2_total_page = get_page_num(t2);
@@ -240,29 +247,28 @@ _Table* simple_hash_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Ta
 
     int counter=0;
     for(int t1_pdx=0; t1_pdx < t1_total_page; t1_pdx++) {
-        buffer* t1_ibuf_p = get_page_hash_join(fp1, t1, t1_pdx);
+        buffer* t1_ibuf_p = get_page(fp1, t1, t1_pdx);
         for(int t1_tid = 0; t1_tid < ntuples(t1_ibuf_p); t1_tid++) {
             Tuple r = get_tuple(t1_ibuf_p, t1_tid);
             int index = hash_function(r[idx1], buffer_size);
+            add_tuple(buffers[index].page, buffer_count[index], r, t1);
+            buffer_count[index]++;
 
-            if (buffer_count[index] == MAX_BUFFER_SIZE) {
-                for(int t2_pdx=0; t2_pdx < t2_total_page; t2_pdx++) {
-                    buffer* t2_ibuf_p = get_page_hash_join(fp2, t2, t2_pdx);
-                    for(int t2_tid = 0; t2_tid < ntuples(t2_ibuf_p); t2_tid++) {
+            if (buffer_count[index] == MAX_BUFFER_SIZE ||
+                (t1_pdx == t1_total_page - 1 && t1_tid == ntuples(t1_ibuf_p) - 1)) {
+                for (int t2_pdx = 0; t2_pdx < t2_total_page; t2_pdx++) {
+                    buffer* t2_ibuf_p = get_page(fp2, t2, t2_pdx);
+                    for (int t2_tid = 0; t2_tid < ntuples(t2_ibuf_p); t2_tid++) {
                         Tuple s = get_tuple(t2_ibuf_p, t2_tid);
                         int s_index = hash_function(s[idx2], buffer_size);
 
                         for (int k = 0; k < buffer_count[s_index]; k++) {
                             Tuple rr = (Tuple) malloc(t1_size);
-                            memcpy(rr, buffers[s_index].page + k* get_tuple_size(t1), get_tuple_size(t1));
+                            memcpy(rr, buffers[s_index].page + k * get_tuple_size(t1), get_tuple_size(t1));
                             if (rr[idx1] == s[idx2]) {
-                                printf("Match found: (%d, %d), (%d, %d)\n", idx1, rr[idx1], idx2, s[idx2]);
-                                Tuple new_tuple = malloc(t1_size + t2_size);
-                                memcpy(new_tuple, r, t1_size);
-                                memcpy(new_tuple + t1->nattrs, s, t2_size);
-                                print_tuple(new_tuple, t1->nattrs + t2->nattrs);
+                                Tuple new_tuple = join_tuple(rr, s, t1, t2);
                                 result->tuples[counter++] = new_tuple;
-                                counter++;
+                                print_tuple(new_tuple, t1->nattrs + t2->nattrs);
                             }
                         }
                     }
@@ -272,18 +278,18 @@ _Table* simple_hash_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Ta
                     buffer_count[i] = 0;
                 }
             }
-            add_tuple(buffers[index].page, buffer_count[index], r, t1);
-            buffer_count[index]++;
         }
 //        for (int i = 0; i < buffer_size; i++) {
 //            free(buffers[i].page);
 //        }
     }
+    result->ntuples = counter;
+    result->nattrs = t1->nattrs + t2->nattrs;
     return result;
 }
 
 _Table* nested_for_loop_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Table* t2) {
-    _Table* result = malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
+    _Table* result = (_Table*) malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
     int counter = 0;
     INT t1_size = get_tuple_size(t1), t2_size = get_tuple_size(t2);
     INT t1_total_page = get_page_num(t1), t2_total_page = get_page_num(t2);
@@ -296,11 +302,9 @@ _Table* nested_for_loop_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1
                     Tuple r = get_tuple(t1_ibuf_p, t1_tid);
                     Tuple s = get_tuple(t2_ibuf_p, t2_tid);
                     if (r[idx1] == s[idx2]) {
-                        Tuple new_tuple = malloc(t1_size + t2_size);
-                        memcpy(new_tuple, r, t1_size);
-                        memcpy(new_tuple + t1->nattrs, s, t2_size);
-                        print_tuple(new_tuple, t1->nattrs + t2->nattrs);
+                        Tuple new_tuple = join_tuple(r, s, t1, t2);
                         result->tuples[counter++] = new_tuple;
+                        print_tuple(new_tuple, t1->nattrs + t2->nattrs);
                     }
                 }
             }
@@ -308,7 +312,6 @@ _Table* nested_for_loop_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1
     }
     result->ntuples = counter;
     result->nattrs = t1->nattrs + t2->nattrs;
-    result->ntuples = counter;
     return result;
 }
 
