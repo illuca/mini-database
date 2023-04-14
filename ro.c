@@ -1,7 +1,8 @@
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
+#include <assert.h>
 #include "ro.h"
 #include "db.h"
 #include "bufpool.h"
@@ -60,31 +61,6 @@ UINT get_tuple_size(Table* t) {
     return t->nattrs * sizeof(INT);
 }
 
-void write_tuples_from_page(Tuple* result, char* page, INT tuple_size, INT ntuples_per_page) {
-    page += sizeof(UINT64);
-    for (int i = 0; i < ntuples_per_page; i++) {
-        Tuple tuple = (Tuple) malloc(tuple_size);
-        memcpy(tuple, page, tuple_size);
-        page += tuple_size;
-//        print_tuple(tuple, get_tuple_size / sizeof(INT));
-        result[i] = tuple;
-    }
-}
-
-Tuple* get_tuples_from_page(char* page, INT tuple_size, INT ntuples_per_page) {
-    page += sizeof(UINT64);
-    Tuple tuples[ntuples_per_page + 1];
-    for (int i = 0; i < ntuples_per_page; i++) {
-        memcpy(tuples + i, page, tuple_size);
-        print_tuple(tuples + i, tuple_size / sizeof(INT));
-        page += tuple_size;
-    }
-    tuples[ntuples_per_page + 1] = NULL;
-    return tuples;
-}
-
-
-
 INT get_ntuples_per_page(Table* t) {
     return (get_conf()->page_size - sizeof(UINT64)) / sizeof(INT) / t->nattrs;
 }
@@ -115,52 +91,14 @@ int ntuples(buffer* p) {
 Tuple get_tuple(buffer* p, int tid) {
     Table* t = p->table;
     char* page = p->page;
-    Tuple result = (Tuple) malloc(sizeof(Tuple));
     UINT tuple_size = get_tuple_size(t);
+    Tuple result = (Tuple) malloc(tuple_size);
     memcpy(result, page + sizeof(UINT64) + tid * tuple_size, tuple_size);
     return result;
 }
 
-buffer* get_page_hash_join(FILE* fp, Table* t, int page_index) {
-    INT page_size = get_conf()->page_size;
-    char* page = (char*) malloc(page_size);
-    fseek(fp, page_index * page_size, SEEK_SET);
-    fread(page, page_size, 1, fp);
-    log_read_page(get_page_id(page));
-    BufPool bp = get_bp();
-    buffer* result = (buffer*) malloc(sizeof(buffer));
-    result->page = page;
-    result->table = t;
-    result->oid = t->oid;
-    result->page_index = page_index;
-    return result;
-}
-
-buffer* get_page(FILE* fp, Table* t, int page_index) {
-    BufPool pool = get_bp();
-    int slot = pageInPool(pool, t->oid, page_index);
-    pool->nrequests++;
-
-    if (slot >= 0) {
-        pool->nhits++;
-    } else {
-        INT page_size = get_conf()->page_size;
-        char* page = (char*) malloc(page_size);
-        fseek(fp, page_index * page_size, SEEK_SET);
-        fread(page, page_size, 1, fp);
-        log_read_page(get_page_id(page));
-        slot = store_page_in_pool(pool, t, page_index, page);
-    }
-    //TODO：所以pin是什么？
-    pool->bufs[slot].pin++;
-    removeFromUsedList(pool, slot);
-    showPoolState(pool);  // for debugging
-
-    return &pool->bufs[slot];
-}
-
 FILE* get_table_fp(char* table_name) {
-    Database * db = get_db();
+    Database* db = get_db();
     Table* t = get_table(table_name);
     char* table_path = (char*) malloc(sizeof(char) * 100);
     sprintf(table_path, "%s/%u", db->path, t->oid);
@@ -177,7 +115,7 @@ FILE* get_table_fp(char* table_name) {
 _Table* sel(const UINT idx, const INT cond_val, const char* table_name) {
     printf("sel() is invoked.\n");
     Table* t = get_table(table_name);
-    _Table* result = malloc(sizeof(_Table) + t->ntuples * sizeof(Tuple));
+    _Table* result = (_Table*)malloc(sizeof(_Table) + t->ntuples * sizeof(Tuple));
     if (t == NULL) {
         printf("Table %s does not exist.\n", table_name);
         return NULL;
@@ -192,14 +130,16 @@ _Table* sel(const UINT idx, const INT cond_val, const char* table_name) {
     INT total_page = get_page_num(t);
     int counter = 0;
     for (int page_idx = 0; page_idx < total_page; page_idx++) {
-        buffer* ibuf_p = get_page(input, t, page_idx);
+        buffer* ibuf_p = request_page(input, t, page_idx);
 
-        for(int tid = 0; tid < ntuples(ibuf_p); tid++) {
+        for (int tid = 0; tid < ntuples(ibuf_p); tid++) {
             Tuple tuple = get_tuple(ibuf_p, tid);
-            if(tuple[idx] == cond_val) {
+            if (tuple[idx] == cond_val) {
                 result->tuples[counter++] = tuple;
             }
         }
+        release_page(ibuf_p);
+        log_release_page(ibuf_p->page_id);
     }
     result->ntuples = counter;
     result->nattrs = t->nattrs;
@@ -208,15 +148,11 @@ _Table* sel(const UINT idx, const INT cond_val, const char* table_name) {
     return result;
 }
 
-char* get_pages(Table* t) {
-    return NULL;
-}
-
 int hash_function(int key, int table_size) {
     return key % table_size;
 }
 
-void add_tuple(char* page, int tid, Tuple tuple, Table * t) {
+void add_tuple(char* page, int tid, Tuple tuple, Table* t) {
     UINT tuple_size = get_tuple_size(t);
     memcpy(page + tid * tuple_size, tuple, tuple_size);
 }
@@ -231,84 +167,100 @@ Tuple join_tuple(Tuple tuple1, Tuple tuple2, Table* t1, Table* t2) {
 
 _Table* simple_hash_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Table* t2) {
     _Table* result = (_Table*) malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
-    buffer* buffers = (buffer*) malloc(sizeof(buffer));
-    int buffer_size = get_conf()->buf_slots;
+    int buffer_size = get_bp()->nbufs;
     int buffer_count[buffer_size];
+    //TODO 注意这里是指定了t1为outer，但是实际应该进行比较的，到时候就对换就行，t1和t2互换指针
     INT t1_total_page = get_page_num(t1), t2_total_page = get_page_num(t2);
     UINT t1_size = get_tuple_size(t1), t2_size = get_tuple_size(t2);
+    int MAX_BUFFER_SLOT_SIZE = get_conf()->page_size / sizeof(INT) / t1->nattrs;
 
-    //TODO 注意这里是指定了t1为outer，但是实际应该进行比较的，到时候就对换就行，t1和t2互换指针
-    int MAX_BUFFER_SIZE = get_conf()->page_size / sizeof(INT) / t1->nattrs;
+//    buffer* buffers = (buffer*) malloc(buffer_size * (sizeof(buffer) + sizeof(Table) + get_conf()->page_size));
+    buffer buffers[buffer_size];
 
     for (int i = 0; i < buffer_size; i++) {
-        buffers[i].page = (char*) malloc(MAX_BUFFER_SIZE * t1_size);
         buffer_count[i] = 0;
+        buffers[i].page = (char*) malloc(get_conf()->page_size);
+//        assert(buffers[i].page != NULL);
     }
 
-    int counter=0;
-    for(int t1_pdx=0; t1_pdx < t1_total_page; t1_pdx++) {
-        buffer* t1_ibuf_p = get_page(fp1, t1, t1_pdx);
-        for(int t1_tid = 0; t1_tid < ntuples(t1_ibuf_p); t1_tid++) {
+    int counter = 0;
+    for (int t1_pdx = 0; t1_pdx < t1_total_page; t1_pdx++) {
+        buffer* t1_ibuf_p = request_page(fp1, t1, t1_pdx);
+        for (int t1_tid = 0; t1_tid < ntuples(t1_ibuf_p); t1_tid++) {
             Tuple r = get_tuple(t1_ibuf_p, t1_tid);
             int index = hash_function(r[idx1], buffer_size);
             add_tuple(buffers[index].page, buffer_count[index], r, t1);
             buffer_count[index]++;
 
-            if (buffer_count[index] == MAX_BUFFER_SIZE ||
+            if (buffer_count[index] == MAX_BUFFER_SLOT_SIZE ||
                 (t1_pdx == t1_total_page - 1 && t1_tid == ntuples(t1_ibuf_p) - 1)) {
                 for (int t2_pdx = 0; t2_pdx < t2_total_page; t2_pdx++) {
-                    buffer* t2_ibuf_p = get_page(fp2, t2, t2_pdx);
+                    buffer* t2_ibuf_p = request_page(fp2, t2, t2_pdx);
                     for (int t2_tid = 0; t2_tid < ntuples(t2_ibuf_p); t2_tid++) {
                         Tuple s = get_tuple(t2_ibuf_p, t2_tid);
                         int s_index = hash_function(s[idx2], buffer_size);
 
                         for (int k = 0; k < buffer_count[s_index]; k++) {
+//                            Tuple rr = buffers[s_index].page + k * get_tuple_size(t1);
                             Tuple rr = (Tuple) malloc(t1_size);
+                            //TODO这一步有问题
                             memcpy(rr, buffers[s_index].page + k * get_tuple_size(t1), get_tuple_size(t1));
                             if (rr[idx1] == s[idx2]) {
                                 Tuple new_tuple = join_tuple(rr, s, t1, t2);
                                 result->tuples[counter++] = new_tuple;
-                                print_tuple(new_tuple, t1->nattrs + t2->nattrs);
                             }
                         }
                     }
+                    release_page(t2_ibuf_p);
+                    log_release_page(t2_ibuf_p->page_id);
                 }
                 // clear buffer
                 for (int i = 0; i < buffer_size; i++) {
-                    buffer_count[i] = 0;
+                    memset(buffers[index].page, 0, MAX_BUFFER_SLOT_SIZE * t1_size);
+                    buffer_count[i]=0;
                 }
             }
         }
-//        for (int i = 0; i < buffer_size; i++) {
-//            free(buffers[i].page);
-//        }
+        release_page(t1_ibuf_p);
+        log_release_page(t1_ibuf_p->page_id);
+    }//end of for
+//    free(buffers);
+    for(int i = 0; i < buffer_size; i++) {
+        free(buffers[i].page);
     }
+
     result->ntuples = counter;
     result->nattrs = t1->nattrs + t2->nattrs;
     return result;
 }
 
-_Table* nested_for_loop_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Table* t2) {
+_Table* block_nested_loop_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Table* t2) {
     _Table* result = (_Table*) malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
     int counter = 0;
-    INT t1_size = get_tuple_size(t1), t2_size = get_tuple_size(t2);
+    buffer* buffers = get_bp()->bufs;
+    int N = get_bp()->nbufs;
+    int outer_buf_size = N - 1;
+
     INT t1_total_page = get_page_num(t1), t2_total_page = get_page_num(t2);
-    for(int t1_pdx=0; t1_pdx < t1_total_page; t1_pdx++) {
-        buffer* t1_ibuf_p = get_page(fp1, t1, t1_pdx);
-        for(int t2_pdx=0; t2_pdx < t2_total_page; t2_pdx++) {
-            buffer* t2_ibuf_p = get_page(fp2, t2, t2_pdx);
-            for(int t1_tid = 0; t1_tid < ntuples(t1_ibuf_p); t1_tid++) {
-                for(int t2_tid = 0; t2_tid < ntuples(t2_ibuf_p); t2_tid++) {
+    for (int t1_pdx = 0; t1_pdx < t1_total_page; t1_pdx++) {
+        buffer* t1_ibuf_p = request_page(fp1, t1, t1_pdx);
+        for (int t2_pdx = 0; t2_pdx < t2_total_page; t2_pdx++) {
+            buffer* t2_ibuf_p = request_page(fp2, t2, t2_pdx);
+            for (int t1_tid = 0; t1_tid < ntuples(t1_ibuf_p); t1_tid++) {
+                for (int t2_tid = 0; t2_tid < ntuples(t2_ibuf_p); t2_tid++) {
                     Tuple r = get_tuple(t1_ibuf_p, t1_tid);
                     Tuple s = get_tuple(t2_ibuf_p, t2_tid);
                     if (r[idx1] == s[idx2]) {
                         Tuple new_tuple = join_tuple(r, s, t1, t2);
                         result->tuples[counter++] = new_tuple;
-                        print_tuple(new_tuple, t1->nattrs + t2->nattrs);
                     }
                 }
             }
+            release_page(t2_ibuf_p);
+            log_release_page(t2_ibuf_p->page_id);
         }
+        release_page(t1_ibuf_p);
+        log_release_page(t1_ibuf_p->page_id);
     }
     result->ntuples = counter;
     result->nattrs = t1->nattrs + t2->nattrs;
@@ -329,15 +281,22 @@ _Table* join(const UINT idx1, const char* table1_name, const UINT idx2, const ch
     _Table* result = NULL;
 
     FILE* fp1 = get_table_fp(table1_name);
+    log_open_file(t1->oid);
     FILE* fp2 = get_table_fp(table2_name);
+    log_open_file(t2->oid);
 
     INT t1_total_page = get_page_num(t1);
     INT t2_total_page = get_page_num(t2);
 
     if (get_conf()->buf_slots < t1_total_page + t2_total_page) {
-        result = nested_for_loop_join(idx1, idx2, fp1, fp2, t1, t2);
+        result = block_nested_loop_join(idx1, idx2, fp1, fp2, t1, t2);
     } else {
         result = simple_hash_join(idx1, idx2, fp1, fp2, t1, t2);
     }
+
+    fclose(fp1);
+    log_close_file(t1->oid);
+    fclose(fp2);
+    log_close_file(t2->oid);
     return result;
 }

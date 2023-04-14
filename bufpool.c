@@ -6,6 +6,7 @@
 #include <assert.h>
 #include "bufpool.h"
 #include "db.h"
+#include "ro.h"
 
 // for Cycle strategy, we simply re-use the nused counter
 // since we don't actually need to maintain a usedList
@@ -44,13 +45,16 @@ BufPool initBufPool(int nbufs, char* strategy)
     assert(bp->freeList != NULL);
     bp->usedList = malloc(nbufs * sizeof(int));
     assert(bp->usedList != NULL);
-    bp->bufs = malloc(nbufs * sizeof(struct buffer));
+    bp->bufs = malloc(nbufs * sizeof(buffer));
     assert(bp->bufs != NULL);
+    bp->nvb=0;
 
     int i;
     for (i = 0; i < nbufs; i++) {
         bp->bufs[i].id[0] = '\0';
         bp->bufs[i].pin = 0;
+        bp->bufs[i].usage = 0;
+        bp->bufs[i].oid = -1;
         bp->bufs[i].page_index = -1;
         bp->bufs[i].page_id = -1;
         bp->bufs[i].page = NULL;
@@ -74,8 +78,9 @@ static unsigned int clock = 0;
 // - check whether page from rel is already in the pool
 // - returns the slot containing this page, else returns -1
 
-int pageInPool(BufPool pool, UINT oid, int page_index)
+int pageInPool(UINT oid, int page_index)
 {
+    BufPool pool = get_bp();
     int slot = -1;
 
     for (int i = 0; i < pool->nbufs; i++) {
@@ -95,8 +100,9 @@ int pageInPool(BufPool pool, UINT oid, int page_index)
 //   by moving all later elements down
 // 先把所有的free位置用完，如果还不够再用替换算法，例如LRU之类的
 static
-int removeFirstFree(BufPool pool)
+int removeFirstFree()
 {
+    BufPool pool = get_bp();
     //先进先出，freeList是一个队列
     int v, i;
     assert(pool->nfree > 0);
@@ -112,8 +118,10 @@ int removeFirstFree(BufPool pool)
 // - search for a slot in the usedList and remove it
 // - depends on how usedList managed, so is strategy-dependent
 
-void removeFromUsedList(BufPool pool, int slot)
+void removeFromUsedList(int slot)
 {
+    BufPool pool = get_bp();
+
     int i, j;
     if (strcmp(pool->strategy, "LRU") ==0
         || strcmp(pool->strategy, "MRU") ==0) {
@@ -201,8 +209,23 @@ void makeAvailable(BufPool pool, int slot)
     }
 }
 
+void write_to_pool(Table* t, int slot, int page_index, char* page) {
+    BufPool pool = get_bp();
+    pool->nreads++;
+    UINT64 page_id;
+    memcpy(&page_id, page, sizeof(UINT64));
+    sprintf(pool->bufs[slot].id, "%u-%llu", t->oid, page_id);
+    //TODO 注意之后removeFromUsedList要free
+    pool->bufs[slot].oid = t->oid;
+    pool->bufs[slot].table = t;
+    pool->bufs[slot].page_index = page_index;
+    pool->bufs[slot].page_id = page_id;
+    pool->bufs[slot].page = page;
+}
 
-int store_page_in_pool(BufPool pool, Table* t, int page_index, char* page) {
+
+int store_page_in_pool(Table* t, int page_index, char* page) {
+    BufPool pool = get_bp();
     // page_id is not in pool
     int slot;
     if (pool->nfree > 0) {
@@ -227,59 +250,44 @@ int store_page_in_pool(BufPool pool, Table* t, int page_index, char* page) {
     return slot;
 }
 
-// page!=NULL是存储
-// page=NULL是从buffer中读
-int request_page_in_pool(BufPool pool, UINT oid, int page_index, char* page)
-{
-    UINT64 page_id;
-    memcpy(&page_id, page, sizeof(UINT64));
-
-    // buffer的下标
-    int slot;
-
+buffer* request_page(FILE* fp, Table* t, int page_index) {
+    BufPool pool = get_bp();
+    buffer* bufs = pool->bufs;
+    int slot = pageInPool(t->oid, page_index);
     pool->nrequests++;
-    slot = pageInPool(pool, oid, page_index);
-    if (slot >= 0)
-        pool->nhits++;
-    else { // page_id is not already in pool
-        if (pool->nfree > 0) {
-            // 如果有空余，先把所有的freeList位置用完，如果还不够再用替换算法，例如LRU之类的
-            slot = removeFirstFree(pool);
-        }
-        else {
-            // 如果buffer没有空余
-            slot = grabNextSlot(pool);
-        }
-        if (slot < 0) {
-            fprintf(stderr, "Failed to find slot for %u%llu\n", oid, page_id);
-            exit(1);
-        }
-        pool->nreads++;
-        sprintf(pool->bufs[slot].id, "%u-%llu", oid, page_id);
-        //TODO 注意之后removeFromUsedList要free
+    UINT buffer_size = get_conf()->buf_slots;
+    int* nvb_p = &pool->nvb;
 
-        pool->bufs[slot].pin = 0;
-        pool->bufs[slot].oid = oid;
-        pool->bufs[slot].page_index = page_index;
-        pool->bufs[slot].page_id = page_id;
-        pool->bufs[slot].page = page;
+    if (slot >= 0) {
+        bufs[slot].usage++;
+        bufs[slot].pin = 1;
+        pool->nhits++;
+        return &bufs[slot];
+    }
+
+    while (1) {
+        if (bufs[*nvb_p].pin == 0 && bufs[*nvb_p].usage == 0) {
+            INT page_size = get_conf()->page_size;
+            char* page = (char*) malloc(page_size);
+            fseek(fp, page_index * page_size, SEEK_SET);
+            fread(page, page_size, 1, fp);
+            log_read_page(get_page_id(page));
+
+            write_to_pool(t, *nvb_p, page_index, page);
+            pool->bufs[*nvb_p].usage=1;
+            pool->bufs[*nvb_p].pin = 1;
+            int tmp = *nvb_p;
+            *nvb_p = (*nvb_p + 1) % buffer_size;
+            return &bufs[tmp];
+        } else {
+            if (bufs[*nvb_p].usage > 0) bufs[*nvb_p].usage--;
+            *nvb_p = (*nvb_p + 1) % buffer_size;
+        }
     }
 }
 
-void release_page(BufPool pool, UINT oid, int page)
-{
-    printf("Release %u-%d\n", oid, page);
-    pool->nreleases++;
-
-    int i;
-    i = pageInPool(pool, oid, page);
-    assert(i >= 0);
-    // last user of page is about to release
-    if (pool->bufs[i].pin == 1) {
-        makeAvailable(pool, i);
-    }
-    pool->bufs[i].pin--;
-    //showPoolState(pool);  // for debugging
+void release_page(buffer * ibuf_p) {
+    ibuf_p->pin = 0;
 }
 
 // showPoolUsage(pool)

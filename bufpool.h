@@ -3,6 +3,17 @@
 #include "db.h"
 
 #define MAXID 20
+// one buffer
+typedef struct buffer {
+    char id[MAXID];
+    int pin;
+    int usage;
+    UINT oid;
+    int page_index;
+    UINT64 page_id;
+    Table* table;
+    char* page;
+} buffer;
 
 typedef struct bufPool {
     int nbufs;         // how many buffers
@@ -17,37 +28,30 @@ typedef struct bufPool {
     int nfree;
     int* usedList;     // implements replacement strategy
     int nused;
-    struct buffer* bufs;
+    int nvb;
+    buffer* bufs;
 } bufPool;
-
-// one buffer
-typedef struct buffer {
-    char id[MAXID];
-    int pin;
-    int usage;
-    UINT oid;
-    Table* table;
-    int page_index;
-    UINT64 page_id;
-    char* page;
-} buffer;
 
 typedef struct bufPool* BufPool;
 
 BufPool initBufPool(int, char*);
 
-int request_page_in_pool(BufPool pool, UINT oid, int page_index, char* page);
+int request_page_in_pool(INT oid, int page_index, char* page);
 
-void release_page(BufPool, UINT oid, int);
+void write_to_pool(Table* t, int slot, int page_index, char* page);
 
-int store_page_in_pool(BufPool pool, Table* table, int page_index, char* page);
+buffer* request_page(FILE* fp, Table* t, int page_index);
 
-void removeFromUsedList(BufPool pool, int slot);
+void release_page(buffer*);
 
-void showPoolUsage(BufPool);
+int store_page_in_pool(Table* table, int page_index, char* page);
 
-void showPoolState(BufPool);
+void removeFromUsedList(int slot);
 
-int pageInPool(BufPool, UINT, int);
+void showPoolUsage();
+
+void showPoolState();
+
+int pageInPool(UINT, int);
 
 BufPool get_bp();
