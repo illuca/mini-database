@@ -5,7 +5,7 @@ make
 
 test_folder='test'
 
-valgrind ./main 64 6 3 CLS ./data ./test/test1/data_1.txt ./test/test1/query_1.txt ./test/test1/log_1.txt
+valgrind --leak-check=full ./main 64 6 3 CLS ./data ./test/test1/data_1.txt ./test/test1/query_1.txt ./test/test1/log_1.txt
 
 # selection only test
 valgrind ./main 50 3 3 CLS ./data ./test/test2/data_2.txt ./test/test2/query_2.txt ./test/test2/log_2.txt

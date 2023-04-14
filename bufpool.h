@@ -36,22 +36,14 @@ typedef struct bufPool* BufPool;
 
 BufPool initBufPool(int, char*);
 
-int request_page_in_pool(INT oid, int page_index, char* page);
-
-void write_to_pool(Table* t, int slot, int page_index, char* page);
+void write_to_pool(Table* t, int slot, int page_index, FILE* input);
 
 buffer* request_page(FILE* fp, Table* t, int page_index);
 
 void release_page(buffer*);
 
-int store_page_in_pool(Table* table, int page_index, char* page);
-
-void removeFromUsedList(int slot);
-
-void showPoolUsage();
-
-void showPoolState();
-
 int pageInPool(UINT, int);
 
 BufPool get_bp();
+
+void free_bp();
