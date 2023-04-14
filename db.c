@@ -116,7 +116,7 @@ Database* init_db(char* input_data_path, char* data_path) {
             // calculate number of tuples per page
             ntuples_per_page = (cf->page_size - sizeof(UINT64)) / sizeof(INT) / t.nattrs;
             nbytes_free = (cf->page_size - sizeof(UINT64)) % (sizeof(INT) * t.nattrs);
-            // printf("ntuples = %u, free bytes = %u\n",get_ntuples_per_page,nbytes_free);
+            // printf("get_tuples_num = %u, free bytes = %u\n",get_ntuples_per_page,nbytes_free);
 
             processed_ntuples = 0;
             continue;

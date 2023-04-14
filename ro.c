@@ -10,13 +10,9 @@
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
-
 void init() {
     // do some initialization here.
-
-    // example to get the Conf pointer
     Conf* cf = get_conf();
-    // example to get the Database pointer
     initBufPool(cf->buf_slots, cf->buf_policy);
     printf("init() is invoked.\n");
 }
@@ -82,7 +78,7 @@ void print_tuples(Tuple* tuples, int length, UINT nattrs) {
     }
 }
 
-int ntuples(buffer* p) {
+int get_tuples_num(buffer* p) {
     Table* t = p->table;
     int ntuples_per_page = get_ntuples_per_page(t->nattrs);
     int page_num = get_page_num(t->nattrs, t->ntuples);
@@ -123,7 +119,7 @@ FILE* get_table_fp(const char* table_name) {
 _Table* sel(const UINT idx, const INT cond_val, const char* table_name) {
     printf("sel() is invoked.\n");
     Table* t = get_table(table_name);
-    _Table* result = (_Table*)malloc(sizeof(_Table) + t->ntuples * sizeof(Tuple));
+    _Table* result = (_Table*) malloc(sizeof(_Table) + t->ntuples * sizeof(Tuple));
     if (t == NULL) {
         printf("Table %s does not exist.\n", table_name);
         return NULL;
@@ -140,10 +136,12 @@ _Table* sel(const UINT idx, const INT cond_val, const char* table_name) {
     for (int page_idx = 0; page_idx < total_page; page_idx++) {
         buffer* ibuf_p = request_page(input, t, page_idx);
 
-        for (int tid = 0; tid < ntuples(ibuf_p); tid++) {
+        for (int tid = 0; tid < get_tuples_num(ibuf_p); tid++) {
             Tuple tuple = get_tuple(ibuf_p, tid);
             if (tuple[idx] == cond_val) {
                 result->tuples[counter++] = tuple;
+            } else {
+                free(tuple);
             }
         }
         release_page(ibuf_p);
@@ -194,17 +192,18 @@ _Table* simple_hash_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Ta
     int counter = 0;
     for (int t1_pdx = 0; t1_pdx < t1_total_page; t1_pdx++) {
         buffer* t1_ibuf_p = request_page(fp1, t1, t1_pdx);
-        for (int t1_tid = 0; t1_tid < ntuples(t1_ibuf_p); t1_tid++) {
+        for (int t1_tid = 0; t1_tid < get_tuples_num(t1_ibuf_p); t1_tid++) {
             Tuple r = get_tuple(t1_ibuf_p, t1_tid);
             int index = hash_function(r[idx1], buffer_size);
-            add_tuple(buffers[index].page,buffer_count[index],r,t1);
+            add_tuple(buffers[index].page, buffer_count[index], r, t1);
+            free(r);
             buffer_count[index]++;
 
             if (buffer_count[index] == MAX_BUFFER_SLOT_SIZE ||
-                (t1_pdx == t1_total_page - 1 && t1_tid == ntuples(t1_ibuf_p) - 1)) {
+                (t1_pdx == t1_total_page - 1 && t1_tid == get_tuples_num(t1_ibuf_p) - 1)) {
                 for (int t2_pdx = 0; t2_pdx < t2_total_page; t2_pdx++) {
                     buffer* t2_ibuf_p = request_page(fp2, t2, t2_pdx);
-                    for (int t2_tid = 0; t2_tid < ntuples(t2_ibuf_p); t2_tid++) {
+                    for (int t2_tid = 0; t2_tid < get_tuples_num(t2_ibuf_p); t2_tid++) {
                         Tuple s = get_tuple(t2_ibuf_p, t2_tid);
                         int s_index = hash_function(s[idx2], buffer_size);
 
@@ -212,12 +211,15 @@ _Table* simple_hash_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Ta
 //                            Tuple rr = buffers[s_index].page + k * get_tuple_size(t1);
                             Tuple rr = (Tuple) malloc(t1_size);
                             //TODO这一步有问题
-                            memcpy(rr, buffers[s_index].page + k * get_tuple_size(t1->nattrs), get_tuple_size(t1->nattrs));
+                            memcpy(rr, buffers[s_index].page + k * get_tuple_size(t1->nattrs),
+                                   get_tuple_size(t1->nattrs));
                             if (rr[idx1] == s[idx2]) {
                                 Tuple new_tuple = join_tuple(rr, s, t1, t2);
                                 result->tuples[counter++] = new_tuple;
                             }
+                            free(rr);
                         }
+                        free(s);
                     }
                     release_page(t2_ibuf_p);
                     log_release_page(t2_ibuf_p->page_id);
@@ -225,15 +227,14 @@ _Table* simple_hash_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Ta
                 // clear buffer
                 for (int i = 0; i < buffer_size; i++) {
                     memset(buffers[index].page, 0, MAX_BUFFER_SLOT_SIZE * t1_size);
-                    buffer_count[i]=0;
+                    buffer_count[i] = 0;
                 }
             }
         }
         release_page(t1_ibuf_p);
         log_release_page(t1_ibuf_p->page_id);
-    }//end of for
-//    free(buffers);
-    for(int i = 0; i < buffer_size; i++) {
+    } // end
+    for (int i = 0; i < buffer_size; i++) {
         free(buffers[i].page);
     }
 
@@ -261,14 +262,14 @@ _Table* block_nested_loop_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* 
 
         for (int t2_pdx = 0; t2_pdx < t2_total_page; t2_pdx++) {
             // Request one page for the inner relation
-            write_to_pool(t2, N-1, t2_pdx, fp2);
+            write_to_pool(t2, N - 1, t2_pdx, fp2);
             buffer* t2_ibuf_p = &buffers[N - 1];
 
             for (int i = 0; i < outer_pages_to_read; i++) {
                 buffer* t1_ibuf_p = &buffers[i];
 
-                for (int t1_tid = 0; t1_tid < ntuples(t1_ibuf_p); t1_tid++) {
-                    for (int t2_tid = 0; t2_tid < ntuples(t2_ibuf_p); t2_tid++) {
+                for (int t1_tid = 0; t1_tid < get_tuples_num(t1_ibuf_p); t1_tid++) {
+                    for (int t2_tid = 0; t2_tid < get_tuples_num(t2_ibuf_p); t2_tid++) {
                         Tuple r = get_tuple(t1_ibuf_p, t1_tid);
                         Tuple s = get_tuple(t2_ibuf_p, t2_tid);
 
@@ -281,6 +282,8 @@ _Table* block_nested_loop_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* 
                                 result->tuples[counter++] = new_tuple;
                             }
                         }
+                        free(r);
+                        free(s);
                     }
                 }
             }
@@ -327,7 +330,7 @@ _Table* join(const UINT idx1, const char* table1_name, const UINT idx2, const ch
         INT cost1 = t1_total_page + ceil(t1_total_page / (double) (N - 1)) * t2_total_page;
         INT cost2 = t2_total_page + ceil(t2_total_page / (double) (N - 1)) * t1_total_page;
         bool flag = cost1 < cost2;
-        if(flag) {
+        if (flag) {
             result = block_nested_loop_join(idx1, idx2, fp1, fp2, t1, t2, flag);
         } else {
             result = block_nested_loop_join(idx2, idx1, fp2, fp1, t2, t1, flag);
@@ -341,7 +344,7 @@ _Table* join(const UINT idx1, const char* table1_name, const UINT idx2, const ch
     log_close_file(t1->oid);
     fclose(fp2);
     log_close_file(t2->oid);
-//    free(t1);
-//    free(t2);
+    free(t1);
+    free(t2);
     return result;
 }

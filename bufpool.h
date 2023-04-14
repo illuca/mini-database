@@ -18,15 +18,8 @@ typedef struct buffer {
 typedef struct bufPool {
     int nbufs;         // how many buffers
     char* strategy;      // LRU, MRU, Cycle
-    int nrequests;     // stats counters
-    int nreleases;
     int nhits;
     int nreads;
-    int nwrites;
-    //先进先出，freeList是一个队列
-    int* freeList;     // list of completely unused bufs
-    int nfree;
-    int* usedList;     // implements replacement strategy
     int nused;
     int nvb;
     buffer* bufs;
