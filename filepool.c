@@ -1,12 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include "filepool.h"
 #include "db.h"
 
 FilePool* file_pool = NULL;
 
-void init_file_pool(int max_opened_file_limit) {
+void init_file_pool(UINT max_opened_file_limit) {
     file_pool = (FilePool*) malloc(sizeof(FilePool));
     file_pool->buffers = (FileInfo*) malloc(max_opened_file_limit * sizeof(FileInfo));
     for (int i = 0; i < max_opened_file_limit; i++) {
@@ -25,20 +24,14 @@ FilePool* get_file_pool() {
 }
 
 void free_file_pool() {
-//    if (file_pool->buffers[i].fi != NULL) {
-//        free(file_pool->files);
-//    }
-//    if (file_pool->oids != NULL) {
-//        free(file_pool->oids);
-//    }
-    for (int i = 0; i < file_pool->nbufs; i++) {
-        FileInfo buffer = file_pool->buffers[i];
-        if(buffer.file != NULL) {
-            close_file_in_pool(i);
-        }
-
-    }
     if (file_pool->buffers != NULL) {
+        for (int i = 0; i < file_pool->nbufs; i++) {
+            FileInfo buffer = file_pool->buffers[i];
+            if(buffer.file != NULL) {
+                close_file_in_pool(i);
+            }
+
+        }
         free(file_pool->buffers);
     }
     if (file_pool != NULL) {
@@ -46,7 +39,7 @@ void free_file_pool() {
     }
 }
 
-void close_file_in_pool(int slot) {
+void close_file_in_pool(UINT slot) {
     FileInfo buffer = file_pool->buffers[slot];
     fclose(buffer.file);
     log_close_file(buffer.oid);
@@ -70,12 +63,13 @@ int file_in_pool(UINT oid) {
 }
 
 
-void open_file_in_pool(int slot, const char* filename, const char* mode, UINT oid) {
+void open_file_in_pool(UINT slot, const char* filename, const char* mode, UINT oid) {
     if (file_pool->num_opened_files >= file_pool->nbufs) {
         close_file_in_pool(slot);
     }
 
     file_pool->buffers[slot].file = fopen(filename, mode);
+    log_open_file(oid);
     file_pool->buffers[slot].oid = oid;
     file_pool->buffers[slot].pin = 1;
     file_pool->buffers[slot].usage = 1;
@@ -86,7 +80,7 @@ FileInfo* request_file(const char* filename, const char* mode, UINT oid) {
     FileInfo* buffers = file_pool->buffers;
     int slot = file_in_pool(oid);
     UINT buffer_size = file_pool->nbufs;
-    int* nvb_p = &file_pool->nvb;
+    UINT* nvb_p = &file_pool->nvb;
 
     if (slot >= 0) {
         buffers[slot].usage++;
@@ -97,7 +91,7 @@ FileInfo* request_file(const char* filename, const char* mode, UINT oid) {
     while (1) {
         if (buffers[*nvb_p].pin == 0 && buffers[*nvb_p].usage == 0) {
             open_file_in_pool(*nvb_p, filename, mode, oid);
-            int tmp = *nvb_p;
+            UINT tmp = *nvb_p;
             *nvb_p = (*nvb_p + 1) % buffer_size;
             return &buffers[tmp];
         } else {

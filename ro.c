@@ -11,17 +11,13 @@
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 void init() {
-    // do some initialization here.
+    printf("init() is invoked.\n");
     Conf* cf = get_conf();
     init_buf_pool(cf->buf_slots, cf->buf_policy);
     init_file_pool(cf->file_limit);
-    printf("init() is invoked.\n");
 }
 
 void release() {
-    // optional
-    // do some end tasks here.
-    // free space to avoid memory leak
     printf("release() is invoked.\n");
     free_buffer_pool();
     free_file_pool();
@@ -64,13 +60,13 @@ UINT get_tuple_size(UINT nattrs) {
     return nattrs * sizeof(INT);
 }
 
-INT get_ntuples_per_page(UINT nattrs) {
+UINT get_ntuples_per_page(UINT nattrs) {
     UINT page_size = get_conf()->page_size;
     return (page_size - sizeof(UINT64)) / sizeof(INT) / nattrs;
 }
 
 INT get_page_num(UINT nattrs, UINT ntuples) {
-    INT ntuples_per_page = get_ntuples_per_page(nattrs);
+    UINT ntuples_per_page = get_ntuples_per_page(nattrs);
     return ceil(ntuples / (double) ntuples_per_page);
 }
 
@@ -80,11 +76,11 @@ void print_tuples(Tuple* tuples, int length, UINT nattrs) {
     }
 }
 
-int get_tuples_num(buffer* p) {
+UINT get_tuples_num(buffer* p) {
     Table* t = p->table;
-    int ntuples_per_page = get_ntuples_per_page(t->nattrs);
+    UINT ntuples_per_page = get_ntuples_per_page(t->nattrs);
     int page_num = get_page_num(t->nattrs, t->ntuples);
-    int tuple_in_last_page = t->ntuples - (page_num - 1) * ntuples_per_page;
+    UINT tuple_in_last_page = t->ntuples - (page_num - 1) * ntuples_per_page;
     if (p->page_index < page_num - 1) {
         return ntuples_per_page;
     } else {
@@ -112,12 +108,6 @@ FileInfo* open_file_by_table_name(const char* table_name) {
     return result;
 }
 
-// invoke log_open_file() every time a page is read from the hard drive.
-// invoke log_close_file() every time a page is released from the memory.
-// testing
-// the following code constructs a synthetic _Table with 10 page and each tuple contains 4 attributes
-// examine log.txt to see the example outputs
-// replace all code with your implementation
 _Table* sel(const UINT idx, const INT cond_val, const char* table_name) {
     printf("sel() is invoked.\n");
     Table* t = get_table(table_name);
@@ -127,7 +117,6 @@ _Table* sel(const UINT idx, const INT cond_val, const char* table_name) {
         return NULL;
     }
     FileInfo* input = open_file_by_table_name(table_name);
-    log_open_file(t->oid);
     if (input == NULL) {
         printf("Table %s data cannot be found.\n", t->name);
         return NULL;
@@ -156,7 +145,7 @@ _Table* sel(const UINT idx, const INT cond_val, const char* table_name) {
     return result;
 }
 
-int hash_function(int key, int tableSize) {
+int hash_function(UINT key, UINT tableSize) {
     return key % tableSize;
 }
 
@@ -173,16 +162,15 @@ Tuple merge_tuples(Tuple tuple1, Tuple tuple2, Table* t1, Table* t2) {
     return result;
 }
 
-_Table* simple_hash_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Table* t2) {
+_Table* simple_hash_join(UINT idx1, UINT idx2, FILE* fp1, FILE* fp2, Table* t1, Table* t2) {
     _Table* result = (_Table*) malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
-    int buffer_size = get_buffer_pool()->nbufs;
+    UINT buffer_size = get_buffer_pool()->nbufs;
     int buffer_count[buffer_size];
     //TODO 注意这里是指定了t1为outer，但是实际应该进行比较的，到时候就对换就行，t1和t2互换指针
     INT t1_total_page = get_page_num(t1->nattrs, t1->ntuples), t2_total_page = get_page_num(t2->nattrs, t2->ntuples);
     UINT t1_size = get_tuple_size(t1->nattrs);
-    int MAX_BUFFER_SLOT_SIZE = get_conf()->page_size / sizeof(INT) / t1->nattrs;
+    UINT MAX_BUFFER_SLOT_SIZE = get_conf()->page_size / sizeof(INT) / t1->nattrs;
 
-//    buffer* buffers = (buffer*) malloc(buffer_size * (sizeof(buffer) + sizeof(Table) + get_conf()->page_size));
     buffer buffers[buffer_size];
 
     for (int i = 0; i < buffer_size; i++) {
@@ -209,9 +197,7 @@ _Table* simple_hash_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Ta
                         int s_index = hash_function(s[idx2], buffer_size);
 
                         for (int k = 0; k < buffer_count[s_index]; k++) {
-//                            Tuple rr = buffers[s_index].page + k * get_tuple_size(t1);
                             Tuple rr = (Tuple) malloc(t1_size);
-                            //TODO这一步有问题
                             memcpy(rr, buffers[s_index].page + k * get_tuple_size(t1->nattrs),
                                    get_tuple_size(t1->nattrs));
                             if (rr[idx1] == s[idx2]) {
@@ -243,26 +229,24 @@ _Table* simple_hash_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Ta
     return result;
 }
 
-_Table* block_nested_loop_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Table* t2, bool flag) {
+_Table* block_nested_loop_join(UINT idx1, UINT idx2, FILE* fp1, FILE* fp2, Table* t1, Table* t2, bool flag) {
     _Table* result = (_Table*) malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
     int counter = 0;
     buffer* buffers = get_buffer_pool()->buffers;
-    int N = get_buffer_pool()->nbufs;
-    int outer_buffer_size = N - 1;
+    UINT N = get_buffer_pool()->nbufs;
+    UINT outer_buffer_size = N - 1;
     INT t1_total_page = get_page_num(t1->nattrs, t1->ntuples), t2_total_page = get_page_num(t2->nattrs, t2->ntuples);
 
-    for (int t1_page_index = 0; t1_page_index < t1_total_page; t1_page_index += outer_buffer_size) {
-        // Request multiple pages for the outer relation
+    // outer relation
+    for (UINT t1_page_index = 0; t1_page_index < t1_total_page; t1_page_index += outer_buffer_size) {
         int outer_pages_to_read = MIN(outer_buffer_size, t1_total_page - t1_page_index);
-//        buffer* outer_buffers[outer_buffer_size];
         for (int i = 0; i < outer_pages_to_read; i++) {
-//            outer_buffers[i] = request_page(fp1, t1, t1_page_index + i);
-            write_to_pool(t1, i, t1_page_index + i, fp1);
+            write_page_to_buffer_pool(t1, i, t1_page_index + i, fp1);
         }
 
+        // inner relation
         for (int t2_page_index = 0; t2_page_index < t2_total_page; t2_page_index++) {
-            // Request one page for the inner relation
-            write_to_pool(t2, N - 1, t2_page_index, fp2);
+            write_page_to_buffer_pool(t2, N - 1, t2_page_index, fp2);
             buffer* t2_page = &buffers[N - 1];
 
             for (int i = 0; i < outer_pages_to_read; i++) {
@@ -278,6 +262,7 @@ _Table* block_nested_loop_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* 
                                 Tuple new_tuple = merge_tuples(r, s, t1, t2);
                                 result->tuples[counter++] = new_tuple;
                             } else {
+                                // ensure the join sequence unchanged
                                 Tuple new_tuple = merge_tuples(s, r, t2, t1);
                                 result->tuples[counter++] = new_tuple;
                             }
@@ -303,12 +288,6 @@ _Table* block_nested_loop_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* 
     return result;
 }
 
-// write your code to join two tables
-// invoke log_read_page() every time a page is read from the hard drive.
-// invoke log_release_page() every time a page is released from the memory.
-
-// invoke log_open_file() every time a page is read from the hard drive.
-// invoke log_close_file() every time a page is released from the memory.
 _Table* join(const UINT idx1, const char* table1_name, const UINT idx2, const char* table2_name) {
     printf("join() is invoked.\n");
     Table* t1 = get_table(table1_name);
@@ -319,18 +298,20 @@ _Table* join(const UINT idx1, const char* table1_name, const UINT idx2, const ch
     FileInfo* fp1 = open_file_by_table_name(table1_name);
     FileInfo* fp2= open_file_by_table_name(table2_name);
 
-    INT t1_total_page = get_page_num(t1->nattrs, t1->ntuples);
-    INT t2_total_page = get_page_num(t2->nattrs, t2->ntuples);
+    UINT t1_total_page = get_page_num(t1->nattrs, t1->ntuples);
+    UINT t2_total_page = get_page_num(t2->nattrs, t2->ntuples);
 
     if (get_conf()->buf_slots < t1_total_page + t2_total_page) {
 
-        int N = get_buffer_pool()->nbufs;
-        INT cost1 = t1_total_page + ceil(t1_total_page / (double) (N - 1)) * t2_total_page;
-        INT cost2 = t2_total_page + ceil(t2_total_page / (double) (N - 1)) * t1_total_page;
+        UINT N = get_buffer_pool()->nbufs;
+        UINT cost1 = t1_total_page + ceil(t1_total_page / (double) (N - 1)) * t2_total_page;
+        UINT cost2 = t2_total_page + ceil(t2_total_page / (double) (N - 1)) * t1_total_page;
+        // compare the cost
         bool flag = cost1 < cost2;
         if (flag) {
             result = block_nested_loop_join(idx1, idx2, fp1->file, fp2->file, t1, t2, flag);
         } else {
+            // transpose outer and inner
             result = block_nested_loop_join(idx2, idx1, fp2->file, fp1->file, t2, t1, flag);
         }
 

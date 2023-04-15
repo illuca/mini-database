@@ -191,11 +191,11 @@ void log_release_page(UINT64 pid) {
 void log_open_file(UINT oid) {
     // the following print info is for testing
     // comment it out to avoid too much output in terminal when developing
-    // printf("Open data %u\n",oid);
+     printf("Open data %u\n",oid);
 }
 
 void log_close_file(UINT oid) {
     // the following print info is for testing
     // comment it out to avoid too much output in terminal when developing
-    // printf("Close data %u\n",oid);
+     printf("Close data %u\n",oid);
 }
