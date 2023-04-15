@@ -6,7 +6,6 @@
 #include "ro.h"
 #include "db.h"
 #include "bufpool.h"
-#include "filepool.h"
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
@@ -125,7 +124,7 @@ _Table* sel(const UINT idx, const INT cond_val, const char* table_name) {
     INT total_page = get_page_num(t->nattrs, t->ntuples);
     int counter = 0;
     for (int page_idx = 0; page_idx < total_page; page_idx++) {
-        buffer* buffer_p = request_page(input->file, t, page_idx);
+        buffer* buffer_p = request_page(t, page_idx);
 
         for (int tid = 0; tid < get_tuples_num(buffer_p); tid++) {
             Tuple tuple = get_tuple_by_tuple_id(buffer_p, tid);
@@ -162,7 +161,7 @@ Tuple merge_tuples(Tuple tuple1, Tuple tuple2, Table* t1, Table* t2) {
     return result;
 }
 
-_Table* simple_hash_join(UINT idx1, UINT idx2, FILE* fp1, FILE* fp2, Table* t1, Table* t2) {
+_Table* simple_hash_join(UINT idx1, UINT idx2, Table* t1, Table* t2) {
     _Table* result = (_Table*) malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
     UINT buffer_size = get_buffer_pool()->nbufs;
     int buffer_count[buffer_size];
@@ -180,7 +179,7 @@ _Table* simple_hash_join(UINT idx1, UINT idx2, FILE* fp1, FILE* fp2, Table* t1, 
 
     int counter = 0;
     for (int t1_page_index = 0; t1_page_index < t1_total_page; t1_page_index++) {
-        buffer* t1_page = request_page(fp1, t1, t1_page_index);
+        buffer* t1_page = request_page(t1, t1_page_index);
         for (int t1_tuple_id = 0; t1_tuple_id < get_tuples_num(t1_page); t1_tuple_id++) {
             Tuple r = get_tuple_by_tuple_id(t1_page, t1_tuple_id);
             int index = hash_function(r[idx1], buffer_size);
@@ -191,7 +190,7 @@ _Table* simple_hash_join(UINT idx1, UINT idx2, FILE* fp1, FILE* fp2, Table* t1, 
             if (buffer_count[index] == MAX_BUFFER_SLOT_SIZE ||
                 (t1_page_index == t1_total_page - 1 && t1_tuple_id == get_tuples_num(t1_page) - 1)) {
                 for (int t2_page_index = 0; t2_page_index < t2_total_page; t2_page_index++) {
-                    buffer* t2_page = request_page(fp2, t2, t2_page_index);
+                    buffer* t2_page = request_page(t2, t2_page_index);
                     for (int t2_tuple_id = 0; t2_tuple_id < get_tuples_num(t2_page); t2_tuple_id++) {
                         Tuple s = get_tuple_by_tuple_id(t2_page, t2_tuple_id);
                         int s_index = hash_function(s[idx2], buffer_size);
@@ -229,7 +228,7 @@ _Table* simple_hash_join(UINT idx1, UINT idx2, FILE* fp1, FILE* fp2, Table* t1, 
     return result;
 }
 
-_Table* block_nested_loop_join(UINT idx1, UINT idx2, FILE* fp1, FILE* fp2, Table* t1, Table* t2, bool flag) {
+_Table* block_nested_loop_join(UINT idx1, UINT idx2, Table* t1, Table* t2, bool flag) {
     _Table* result = (_Table*) malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
     int counter = 0;
     buffer* buffers = get_buffer_pool()->buffers;
@@ -241,12 +240,12 @@ _Table* block_nested_loop_join(UINT idx1, UINT idx2, FILE* fp1, FILE* fp2, Table
     for (UINT t1_page_index = 0; t1_page_index < t1_total_page; t1_page_index += outer_buffer_size) {
         int outer_pages_to_read = MIN(outer_buffer_size, t1_total_page - t1_page_index);
         for (int i = 0; i < outer_pages_to_read; i++) {
-            write_page_to_buffer_pool(t1, i, t1_page_index + i, fp1);
+            write_page_to_buffer_pool(t1, i, t1_page_index + i);
         }
 
         // inner relation
         for (int t2_page_index = 0; t2_page_index < t2_total_page; t2_page_index++) {
-            write_page_to_buffer_pool(t2, N - 1, t2_page_index, fp2);
+            write_page_to_buffer_pool(t2, N - 1, t2_page_index);
             buffer* t2_page = &buffers[N - 1];
 
             for (int i = 0; i < outer_pages_to_read; i++) {
@@ -295,8 +294,7 @@ _Table* join(const UINT idx1, const char* table1_name, const UINT idx2, const ch
 
     _Table* result = NULL;
 
-    FileInfo* fp1 = open_file_by_table_name(table1_name);
-    FileInfo* fp2= open_file_by_table_name(table2_name);
+
 
     UINT t1_total_page = get_page_num(t1->nattrs, t1->ntuples);
     UINT t2_total_page = get_page_num(t2->nattrs, t2->ntuples);
@@ -309,18 +307,16 @@ _Table* join(const UINT idx1, const char* table1_name, const UINT idx2, const ch
         // compare the cost
         bool flag = cost1 < cost2;
         if (flag) {
-            result = block_nested_loop_join(idx1, idx2, fp1->file, fp2->file, t1, t2, flag);
+            result = block_nested_loop_join(idx1, idx2, t1, t2, flag);
         } else {
             // transpose outer and inner
-            result = block_nested_loop_join(idx2, idx1, fp2->file, fp1->file, t2, t1, flag);
+            result = block_nested_loop_join(idx2, idx1, t2, t1, flag);
         }
 
     } else {
-        result = simple_hash_join(idx1, idx2, fp1->file, fp2->file, t1, t2);
+        result = simple_hash_join(idx1, idx2, t1, t2);
     }
 
-    release_file(fp1);
-    release_file(fp2);
     free(t1);
     free(t2);
     return result;

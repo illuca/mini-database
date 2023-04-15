@@ -2,10 +2,8 @@
 
 #include "db.h"
 
-#define MAXID 20
-// one buffer
 typedef struct buffer {
-    char id[MAXID];
+    char id[20];
     int pin;
     int usage;
     UINT oid;
@@ -28,9 +26,9 @@ typedef struct bufPool* BufPool;
 
 BufPool init_buf_pool(UINT, char*);
 
-void write_page_to_buffer_pool(Table* t, UINT slot, UINT page_index, FILE* fp);
+void write_page_to_buffer_pool(Table* t, UINT slot, UINT page_index);
 
-buffer* request_page(FILE* fp, Table* t, int page_index);
+buffer* request_page(Table* t, int page_index);
 
 void release_page(buffer* buffer_p);
 

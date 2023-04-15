@@ -11,7 +11,6 @@ typedef struct FilePool {
     FileInfo* buffers;
     int num_opened_files;
     UINT nbufs;
-    int nused;
     UINT nvb;
 } FilePool;
 

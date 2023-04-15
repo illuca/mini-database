@@ -72,7 +72,10 @@ int page_in_pool(UINT oid, int page_index) {
 }
 
 // write page from fp to buffer[slot]
-void write_page_to_buffer_pool(Table* t, UINT slot, UINT page_index, FILE* fp) {
+void write_page_to_buffer_pool(Table* t, UINT slot, UINT page_index) {
+    FileInfo* file_info = open_file_by_table_name(t->name);
+    FILE* fp = file_info->file;
+
     UINT page_size = get_conf()->page_size;
     fseek(fp, page_index * page_size, SEEK_SET);
     fread(buffer_pool->buffers[slot].page, page_size, 1, fp);
@@ -88,10 +91,11 @@ void write_page_to_buffer_pool(Table* t, UINT slot, UINT page_index, FILE* fp) {
     buffer_pool->buffers[slot].page_id = page_id;
     buffer_pool->buffers[slot].usage = 1;
     buffer_pool->buffers[slot].pin = 1;
+
+    release_file(file_info);
 }
 
-
-buffer* request_page(FILE* fp, Table* t, int page_index) {
+buffer* request_page(Table* t, int page_index) {
     buffer* buffers = buffer_pool->buffers;
     int slot = page_in_pool(t->oid, page_index);
     UINT buffer_size = buffer_pool->nbufs;
@@ -106,7 +110,7 @@ buffer* request_page(FILE* fp, Table* t, int page_index) {
 
     while (1) {
         if (buffers[*nvb_p].pin == 0 && buffers[*nvb_p].usage == 0) {
-            write_page_to_buffer_pool(t, *nvb_p, page_index, fp);
+            write_page_to_buffer_pool(t, *nvb_p, page_index);
             UINT tmp = *nvb_p;
             *nvb_p = (*nvb_p + 1) % buffer_size;
             return &buffers[tmp];
