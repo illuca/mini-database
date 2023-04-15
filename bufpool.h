@@ -1,4 +1,4 @@
-// bufpool.h ... buffer pool interface
+// bufpool.h ... buffer file_pool interface
 
 #include "db.h"
 
@@ -22,21 +22,21 @@ typedef struct bufPool {
     int nreads;
     int nused;
     int nvb;
-    buffer* bufs;
+    buffer* buffers;
 } bufPool;
 
 typedef struct bufPool* BufPool;
 
-BufPool initBufPool(int, char*);
+BufPool init_buf_pool(int, char*);
 
-void write_to_pool(Table* t, int slot, int page_index, FILE* input);
+void write_to_pool(Table* t, int slot, int page_index, FILE* fp);
 
 buffer* request_page(FILE* fp, Table* t, int page_index);
 
-void release_page(buffer*);
+void release_page(buffer* ibuf_p);
 
-int pageInPool(UINT, int);
+int page_in_pool(UINT oid, int page_index);
 
-BufPool get_bp();
+BufPool get_buffer_pool();
 
-void free_bp();
+void free_buffer_pool();

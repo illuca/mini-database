@@ -45,14 +45,14 @@ Database* init_db(char* input_data_path, char* data_path) {
         mkdir(data_path, 0777);
     }
     db = NULL;
-    // open the input data file
+    // open the input data data
     FILE* input_fp = fopen(input_data_path, "r");
     printf("Input data path:%s\n", input_data_path);
     if (input_fp == NULL) {
-        perror("Fail to open the input data file.\n");
+        perror("Fail to open the input data data.\n");
         exit(-1);
     }
-    // file pointer to write tuples 
+    // data pointer to write tuples
     FILE* table_fp = NULL;
 
     // 第几个表
@@ -105,10 +105,10 @@ Database* init_db(char* input_data_path, char* data_path) {
             t.ntuples = 0;
             // add the table pointer to the DB instance
             db->tables[table_idx] = t;
-            // produce table file path
+            // produce table data path
             char table_path[200];
             sprintf(table_path, "%s/%u", db->path, t.oid);
-            // open file pointer for the table
+            // open data pointer for the table
             table_fp = fopen(table_path, "wb");
             // reset page id
             page_id = 0;
@@ -126,7 +126,7 @@ Database* init_db(char* input_data_path, char* data_path) {
 
         // we are processing the first tuple for a page
         if (processed_ntuples == 0) {
-            // write a page id to the file
+            // write a page id to the data
             fwrite(&page_id, sizeof(UINT64), 1, table_fp);
             ++page_id;
         }
@@ -134,8 +134,8 @@ Database* init_db(char* input_data_path, char* data_path) {
         ++db->tables[table_idx].ntuples;
         // printf("processed tuples = %u, tuples per page = %u\n",processed_ntuples,get_ntuples_per_page);
 
-        // write tuple to file
-        // assume each table has only one file
+        // write tuple to data
+        // assume each table has only one data
 
         char* token = strtok(line, " ");
 
@@ -191,11 +191,11 @@ void log_release_page(UINT64 pid) {
 void log_open_file(UINT oid) {
     // the following print info is for testing
     // comment it out to avoid too much output in terminal when developing
-    // printf("Open file %u\n",oid);
+    // printf("Open data %u\n",oid);
 }
 
 void log_close_file(UINT oid) {
     // the following print info is for testing
     // comment it out to avoid too much output in terminal when developing
-    // printf("Close file %u\n",oid);
+    // printf("Close data %u\n",oid);
 }

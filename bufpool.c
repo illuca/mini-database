@@ -1,4 +1,4 @@
-// bufpool.c ... buffer pool implementation
+// bufpool.c ... buffer file_pool implementation
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,74 +12,69 @@
 // since we don't actually need to maintain a usedList
 #define currSlot nused
 
-BufPool bp = NULL;
+BufPool buffer_pool = NULL;
 
-BufPool get_bp() {
-    return bp;
+BufPool get_buffer_pool() {
+    return buffer_pool;
 }
 
-// Interface Functions
+// init_buf_pool(nbufs,strategy)
+// - initialise a buffer file_pool with nbufs
+// - buffer file_pool uses supplied replacement strategy
+BufPool init_buf_pool(int nbufs, char* strategy) {
+    buffer_pool = NULL;
+//    struct buffer *buffers;
 
-
-// initBufPool(nbufs,strategy)
-// - initialise a buffer pool with nbufs
-// - buffer pool uses supplied replacement strategy
-
-BufPool initBufPool(int nbufs, char* strategy) {
-    bp = NULL;
-//    struct buffer *bufs;
-
-    bp = malloc(sizeof(struct bufPool));
-    assert(bp != NULL);
-    bp->nbufs = nbufs;
-    bp->strategy = strategy;
-    bp->nhits = 0;
-    bp->nreads = 0;
-    bp->bufs = malloc(nbufs * sizeof(buffer));
-    assert(bp->bufs != NULL);
-    bp->nvb = 0;
+    buffer_pool = malloc(sizeof(struct bufPool));
+    assert(buffer_pool != NULL);
+    buffer_pool->nbufs = nbufs;
+    buffer_pool->strategy = strategy;
+    buffer_pool->nhits = 0;
+    buffer_pool->nreads = 0;
+    buffer_pool->buffers = malloc(nbufs * sizeof(buffer));
+    assert(buffer_pool->buffers != NULL);
+    buffer_pool->nvb = 0;
 
     int i;
     for (i = 0; i < nbufs; i++) {
-        bp->bufs[i].id[0] = '\0';
-        bp->bufs[i].pin = 0;
-        bp->bufs[i].usage = 0;
-        bp->bufs[i].oid = -1;
-        bp->bufs[i].page_index = -1;
-        bp->bufs[i].page_id = -1;
-        bp->bufs[i].page = (char*) malloc(get_conf()->page_size);
-        bp->bufs[i].table = (Table*) malloc(sizeof(Table));
+        buffer_pool->buffers[i].id[0] = '\0';
+        buffer_pool->buffers[i].pin = 0;
+        buffer_pool->buffers[i].usage = 0;
+        buffer_pool->buffers[i].oid = -1;
+        buffer_pool->buffers[i].page_index = -1;
+        buffer_pool->buffers[i].page_id = -1;
+        buffer_pool->buffers[i].page = (char*) malloc(get_conf()->page_size);
+        buffer_pool->buffers[i].table = (Table*) malloc(sizeof(Table));
         //一开始全都空闲,所以应该把0-nbufs-1都放进freeList
     }
-    return bp;
+    return buffer_pool;
 }
 
-void free_bp() {
-    if (bp != NULL) {
-        if (bp->bufs != NULL) {
-            for (int i = 0; i < bp->nbufs; i++) {
-                if (bp->bufs[i].page !=NULL) {
-                    free(bp->bufs[i].page);
+void free_buffer_pool() {
+    if (buffer_pool != NULL) {
+        if (buffer_pool->buffers != NULL) {
+            for (int i = 0; i < buffer_pool->nbufs; i++) {
+                if (buffer_pool->buffers[i].page != NULL) {
+                    free(buffer_pool->buffers[i].page);
                 }
-                if (bp->bufs[i].table !=NULL) {
-                    free(bp->bufs[i].table);
+                if (buffer_pool->buffers[i].table != NULL) {
+                    free(buffer_pool->buffers[i].table);
                 }
             }
-            free(bp->bufs);
+            free(buffer_pool->buffers);
         }
-        free(bp);
+        free(buffer_pool);
     }
 }
 
 
-// - check whether page from rel is already in the pool
+// - check whether page from rel is already in the file_pool
 // - returns the slot containing this page, else returns -1
-int pageInPool(UINT oid, int page_index) {
-    BufPool pool = get_bp();
+int page_in_pool(UINT oid, int page_index) {
     int slot = -1;
 
-    for (int i = 0; i < pool->nbufs; i++) {
-        buffer b = pool->bufs[i];
+    for (int i = 0; i < buffer_pool->nbufs; i++) {
+        buffer b = buffer_pool->buffers[i];
         if (b.oid == oid && b.page_index == page_index) {
             //返回包含这个page的buffer的index
             slot = i;
@@ -91,37 +86,35 @@ int pageInPool(UINT oid, int page_index) {
 
 // write page from fp to buffer[slot]
 void write_to_pool(Table* t, int slot, int page_index, FILE* fp) {
-    BufPool pool = get_bp();
     UINT page_size = get_conf()->page_size;
     fseek(fp, page_index * page_size, SEEK_SET);
-    fread(pool->bufs[slot].page, page_size, 1, fp);
-    log_read_page(get_page_id(pool->bufs[slot].page));
+    fread(buffer_pool->buffers[slot].page, page_size, 1, fp);
+    log_read_page(get_page_id(buffer_pool->buffers[slot].page));
 
-    pool->nreads++;
+    buffer_pool->nreads++;
     UINT64 page_id;
-    memcpy(&page_id, pool->bufs[slot].page, sizeof(UINT64));
-    sprintf(pool->bufs[slot].id, "%u-%lu", t->oid, page_id);
+    memcpy(&page_id, buffer_pool->buffers[slot].page, sizeof(UINT64));
+    sprintf(buffer_pool->buffers[slot].id, "%u-%lu", t->oid, page_id);
     //TODO 注意之后removeFromUsedList要free
-    pool->bufs[slot].oid = t->oid;
-    memcpy(pool->bufs[slot].table, t, sizeof(Table));
-    pool->bufs[slot].page_index = page_index;
-    pool->bufs[slot].page_id = page_id;
-    pool->bufs[slot].usage = 1;
-    pool->bufs[slot].pin = 1;
+    buffer_pool->buffers[slot].oid = t->oid;
+    memcpy(buffer_pool->buffers[slot].table, t, sizeof(Table));
+    buffer_pool->buffers[slot].page_index = page_index;
+    buffer_pool->buffers[slot].page_id = page_id;
+    buffer_pool->buffers[slot].usage = 1;
+    buffer_pool->buffers[slot].pin = 1;
 }
 
 
 buffer* request_page(FILE* fp, Table* t, int page_index) {
-    BufPool pool = get_bp();
-    buffer* bufs = pool->bufs;
-    int slot = pageInPool(t->oid, page_index);
+    buffer* bufs = buffer_pool->buffers;
+    int slot = page_in_pool(t->oid, page_index);
     UINT buffer_size = get_conf()->buf_slots;
-    int* nvb_p = &pool->nvb;
+    int* nvb_p = &buffer_pool->nvb;
 
     if (slot >= 0) {
         bufs[slot].usage++;
         bufs[slot].pin = 1;
-        pool->nhits++;
+        buffer_pool->nhits++;
         return &bufs[slot];
     }
 

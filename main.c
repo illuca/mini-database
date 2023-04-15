@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
     // argv[3] int: limit for opened files
     // argv[4] string: buffer page replacement policy
     // argv[5] string: path for the database
-    // argv[6] string: path for data file
+    // argv[6] string: path for data data
     // argv[7] string: path for test cases
     // argv[8] string: path for output log
 
@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
     // implement your initialization function.
     init();
 
-    // run test cases and write the log file
+    // run test cases and write the log data
     run(argv[7], argv[8]);
 
 
@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
 void run(char* ra_path, char* log_path) {
     FILE* query_fp = fopen(ra_path, "r");
     char line[100];
-    // replace the old log file if exists
+    // replace the old log data if exists
     FILE* log_fp = fopen(log_path, "w");
 
     while (fgets(line, 100, query_fp)) {
@@ -94,7 +94,7 @@ void run(char* ra_path, char* log_path) {
             _Table* result = sel(idx, val, table_name);
 
 
-            // write the result to log file
+            // write the result to log data
             logT(result, log_fp);
 
             // release the result table
@@ -135,7 +135,7 @@ void run(char* ra_path, char* log_path) {
     fclose(query_fp);
 }
 
-// write a _Table to the log file
+// write a _Table to the log data
 void logT(_Table* t, FILE* log_fp) {
     // output to log
     if (t == NULL) return;
