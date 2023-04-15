@@ -12,6 +12,7 @@ void init_file_pool(int max_opened_file_limit) {
     for (int i = 0; i < max_opened_file_limit; i++) {
         file_pool->buffers[i].file = NULL;
         file_pool->buffers[i].oid = -1;
+        file_pool->buffers[i].pin = 0;
         file_pool->buffers[i].usage = 0;
     }
     file_pool->nvb = 0;
@@ -24,36 +25,43 @@ FilePool* get_file_pool() {
 }
 
 void free_file_pool() {
-    if (file_pool->files != NULL) {
-        free(file_pool->files);
+//    if (file_pool->buffers[i].fi != NULL) {
+//        free(file_pool->files);
+//    }
+//    if (file_pool->oids != NULL) {
+//        free(file_pool->oids);
+//    }
+    for (int i = 0; i < file_pool->nbufs; i++) {
+        FileInfo buffer = file_pool->buffers[i];
+        if(buffer.file != NULL) {
+            close_file_in_pool(i);
+        }
+
     }
-    if (file_pool->oids != NULL) {
-        free(file_pool->oids);
+    if (file_pool->buffers != NULL) {
+        free(file_pool->buffers);
     }
     if (file_pool != NULL) {
         free(file_pool);
     }
 }
 
-bool close_oldest_file() {
-    for (int i = 0; i < file_pool->nbufs; i++) {
-        if (file_pool->files[i] != NULL) {
-            fclose(file_pool->files[i]);
-            log_close_file(file_pool->oids[i]);
-            file_pool->files[i] = NULL;
-            file_pool->oids[i] = -1;
-            file_pool->num_opened_files--;
-            return true;
-        }
-    }
-    return false;
+void close_file_in_pool(int slot) {
+    FileInfo buffer = file_pool->buffers[slot];
+    fclose(buffer.file);
+    log_close_file(buffer.oid);
+    buffer.file = NULL;
+    buffer.oid = -1;
+    buffer.pin = 0;
+    buffer.usage--;
+    file_pool->num_opened_files--;
 }
 
 
 int file_in_pool(UINT oid) {
     int slot = -1;
     for (int i = 0; i < file_pool->nbufs; i++) {
-        if (file_pool->oids[i] == oid) {
+        if (file_pool->buffers[i].oid == oid) {
             slot = i;
             break;
         }
@@ -61,51 +69,45 @@ int file_in_pool(UINT oid) {
     return slot;
 }
 
-FILE* request_page(Table* t) {
-    FILE** files = file_pool->files;
-    int slot = file_in_pool(t->oid);
-    UINT buffer_size = get_conf()->buf_slots;
-    int* nvb_p = &buffer_pool->nvb;
+
+void open_file_in_pool(int slot, const char* filename, const char* mode, UINT oid) {
+    if (file_pool->num_opened_files >= file_pool->nbufs) {
+        close_file_in_pool(slot);
+    }
+
+    file_pool->buffers[slot].file = fopen(filename, mode);
+    file_pool->buffers[slot].oid = oid;
+    file_pool->buffers[slot].pin = 1;
+    file_pool->buffers[slot].usage = 1;
+    file_pool->num_opened_files++;
+}
+
+FileInfo* request_file(const char* filename, const char* mode, UINT oid) {
+    FileInfo* buffers = file_pool->buffers;
+    int slot = file_in_pool(oid);
+    UINT buffer_size = file_pool->nbufs;
+    int* nvb_p = &file_pool->nvb;
 
     if (slot >= 0) {
-        bufs[slot].usage++;
-        bufs[slot].pin = 1;
-        buffer_pool->nhits++;
-        return &bufs[slot];
+        buffers[slot].usage++;
+        buffers[slot].pin = 1;
+        return &buffers[slot];
     }
 
     while (1) {
-        if (bufs[*nvb_p].pin == 0 && bufs[*nvb_p].usage == 0) {
-            write_to_pool(t, *nvb_p, page_index, fp);
+        if (buffers[*nvb_p].pin == 0 && buffers[*nvb_p].usage == 0) {
+            open_file_in_pool(*nvb_p, filename, mode, oid);
             int tmp = *nvb_p;
             *nvb_p = (*nvb_p + 1) % buffer_size;
-            return &bufs[tmp];
+            return &buffers[tmp];
         } else {
-            if (bufs[*nvb_p].usage > 0) bufs[*nvb_p].usage--;
+            if (buffers[*nvb_p].usage > 0) buffers[*nvb_p].usage--;
             *nvb_p = (*nvb_p + 1) % buffer_size;
         }
     }
 }
 
 
-FILE* request_file(const char* filename, const char* mode, UINT oid) {
-    if (file_pool->num_opened_files >= file_pool->nbufs) {
-        if (!close_oldest_file()) {
-            return NULL;
-        }
-    }
-
-    for (int i = 0; i < file_pool->nbufs; i++) {
-        if (file_pool->files[i] == NULL) {
-            file_pool->files[i] = fopen(filename, mode);
-            log_open_file(oid);
-            file_pool->oids[i] = oid;
-
-            if (file_pool->files[i] != NULL) {
-                file_pool->num_opened_files++;
-            }
-            return file_pool->files[i];
-        }
-    }
-    return NULL;
+void release_file(FileInfo* file_info) {
+    file_info->pin = 0;
 }

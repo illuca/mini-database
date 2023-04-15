@@ -33,7 +33,7 @@ void write_to_pool(Table* t, int slot, int page_index, FILE* fp);
 
 buffer* request_page(FILE* fp, Table* t, int page_index);
 
-void release_page(buffer* ibuf_p);
+void release_page(buffer* buffer_p);
 
 int page_in_pool(UINT oid, int page_index);
 

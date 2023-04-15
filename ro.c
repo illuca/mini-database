@@ -2,7 +2,6 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-#include <assert.h>
 #include <stdbool.h>
 #include "ro.h"
 #include "db.h"
@@ -102,12 +101,12 @@ Tuple get_tuple_by_tuple_id(buffer* p, int tid) {
     return result;
 }
 
-FILE* open_file_by_table_name(const char* table_name) {
+FileInfo* open_file_by_table_name(const char* table_name) {
     Database* db = get_db();
     Table* t = get_table(table_name);
     char* table_path = (char*) malloc(sizeof(db->path) + 5);
     sprintf(table_path, "%s/%u", db->path, t->oid);
-    FILE* result = request_file(table_path, "r", t->oid);
+    FileInfo* result = request_file(table_path, "r", t->oid);
     free(table_path);
     free(t);
     return result;
@@ -127,7 +126,7 @@ _Table* sel(const UINT idx, const INT cond_val, const char* table_name) {
         printf("Table %s does not exist.\n", table_name);
         return NULL;
     }
-    FILE* input = open_file_by_table_name(table_name);
+    FileInfo* input = open_file_by_table_name(table_name);
     log_open_file(t->oid);
     if (input == NULL) {
         printf("Table %s data cannot be found.\n", t->name);
@@ -137,7 +136,7 @@ _Table* sel(const UINT idx, const INT cond_val, const char* table_name) {
     INT total_page = get_page_num(t->nattrs, t->ntuples);
     int counter = 0;
     for (int page_idx = 0; page_idx < total_page; page_idx++) {
-        buffer* buffer_p = request_page(input, t, page_idx);
+        buffer* buffer_p = request_page(input->file, t, page_idx);
 
         for (int tid = 0; tid < get_tuples_num(buffer_p); tid++) {
             Tuple tuple = get_tuple_by_tuple_id(buffer_p, tid);
@@ -152,8 +151,7 @@ _Table* sel(const UINT idx, const INT cond_val, const char* table_name) {
     }
     result->ntuples = counter;
     result->nattrs = t->nattrs;
-    fclose(input);
-    log_close_file(t->oid);
+    release_file(input);
     free(t);
     return result;
 }
@@ -240,7 +238,6 @@ _Table* simple_hash_join(int idx1, int idx2, FILE* fp1, FILE* fp2, Table* t1, Ta
     for (int i = 0; i < buffer_size; i++) {
         free(buffers[i].page);
     }
-
     result->ntuples = counter;
     result->nattrs = t1->nattrs + t2->nattrs;
     return result;
@@ -319,8 +316,8 @@ _Table* join(const UINT idx1, const char* table1_name, const UINT idx2, const ch
 
     _Table* result = NULL;
 
-    FILE* fp1 = open_file_by_table_name(table1_name);
-    FILE* fp2 = open_file_by_table_name(table2_name);
+    FileInfo* fp1 = open_file_by_table_name(table1_name);
+    FileInfo* fp2= open_file_by_table_name(table2_name);
 
     INT t1_total_page = get_page_num(t1->nattrs, t1->ntuples);
     INT t2_total_page = get_page_num(t2->nattrs, t2->ntuples);
@@ -332,15 +329,17 @@ _Table* join(const UINT idx1, const char* table1_name, const UINT idx2, const ch
         INT cost2 = t2_total_page + ceil(t2_total_page / (double) (N - 1)) * t1_total_page;
         bool flag = cost1 < cost2;
         if (flag) {
-            result = block_nested_loop_join(idx1, idx2, fp1, fp2, t1, t2, flag);
+            result = block_nested_loop_join(idx1, idx2, fp1->file, fp2->file, t1, t2, flag);
         } else {
-            result = block_nested_loop_join(idx2, idx1, fp2, fp1, t2, t1, flag);
+            result = block_nested_loop_join(idx2, idx1, fp2->file, fp1->file, t2, t1, flag);
         }
 
     } else {
-        result = simple_hash_join(idx1, idx2, fp1, fp2, t1, t2);
+        result = simple_hash_join(idx1, idx2, fp1->file, fp2->file, t1, t2);
     }
 
+    release_file(fp1);
+    release_file(fp2);
     free(t1);
     free(t2);
     return result;

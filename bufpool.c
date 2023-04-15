@@ -106,31 +106,31 @@ void write_to_pool(Table* t, int slot, int page_index, FILE* fp) {
 
 
 buffer* request_page(FILE* fp, Table* t, int page_index) {
-    buffer* bufs = buffer_pool->buffers;
+    buffer* buffers = buffer_pool->buffers;
     int slot = page_in_pool(t->oid, page_index);
-    UINT buffer_size = get_conf()->buf_slots;
+    UINT buffer_size = buffer_pool->nbufs;
     int* nvb_p = &buffer_pool->nvb;
 
     if (slot >= 0) {
-        bufs[slot].usage++;
-        bufs[slot].pin = 1;
+        buffers[slot].usage++;
+        buffers[slot].pin = 1;
         buffer_pool->nhits++;
-        return &bufs[slot];
+        return &buffers[slot];
     }
 
     while (1) {
-        if (bufs[*nvb_p].pin == 0 && bufs[*nvb_p].usage == 0) {
+        if (buffers[*nvb_p].pin == 0 && buffers[*nvb_p].usage == 0) {
             write_to_pool(t, *nvb_p, page_index, fp);
             int tmp = *nvb_p;
             *nvb_p = (*nvb_p + 1) % buffer_size;
-            return &bufs[tmp];
+            return &buffers[tmp];
         } else {
-            if (bufs[*nvb_p].usage > 0) bufs[*nvb_p].usage--;
+            if (buffers[*nvb_p].usage > 0) buffers[*nvb_p].usage--;
             *nvb_p = (*nvb_p + 1) % buffer_size;
         }
     }
 }
 
-void release_page(buffer* ibuf_p) {
-    ibuf_p->pin = 0;
+void release_page(buffer* buffer_p) {
+    buffer_p->pin = 0;
 }
