@@ -161,11 +161,9 @@ Tuple merge_tuples(Tuple tuple1, Tuple tuple2, Table* t1, Table* t2) {
     return result;
 }
 
-_Table* simple_hash_join(UINT idx1, UINT idx2, Table* t1, Table* t2) {
-    _Table* result = (_Table*) malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
+void* simple_hash_join(_Table* result, UINT idx1, UINT idx2, Table* t1, Table* t2) {
     UINT buffer_size = get_buffer_pool()->nbufs;
     int buffer_count[buffer_size];
-    //TODO 注意这里是指定了t1为outer，但是实际应该进行比较的，到时候就对换就行，t1和t2互换指针
     INT t1_total_page = get_page_num(t1->nattrs, t1->ntuples), t2_total_page = get_page_num(t2->nattrs, t2->ntuples);
     UINT t1_size = get_tuple_size(t1->nattrs);
     UINT MAX_BUFFER_SLOT_SIZE = get_conf()->page_size / sizeof(INT) / t1->nattrs;
@@ -224,12 +222,9 @@ _Table* simple_hash_join(UINT idx1, UINT idx2, Table* t1, Table* t2) {
         free(buffers[i].page);
     }
     result->ntuples = counter;
-    result->nattrs = t1->nattrs + t2->nattrs;
-    return result;
 }
 
-_Table* block_nested_loop_join(UINT idx1, UINT idx2, Table* t1, Table* t2, bool flag) {
-    _Table* result = (_Table*) malloc(sizeof(_Table) + (t1->ntuples + t2->ntuples) * sizeof(Tuple));
+void block_nested_loop_join(_Table* result, UINT idx1, UINT idx2, Table* t1, Table* t2, bool flag) {
     int counter = 0;
     buffer* buffers = get_buffer_pool()->buffers;
     UINT N = get_buffer_pool()->nbufs;
@@ -283,38 +278,36 @@ _Table* block_nested_loop_join(UINT idx1, UINT idx2, Table* t1, Table* t2, bool 
     }
 
     result->ntuples = counter;
-    result->nattrs = t1->nattrs + t2->nattrs;
-    return result;
 }
 
 _Table* join(const UINT idx1, const char* table1_name, const UINT idx2, const char* table2_name) {
     printf("join() is invoked.\n");
     Table* t1 = get_table(table1_name);
     Table* t2 = get_table(table2_name);
-
-    _Table* result = NULL;
-
-
+    _Table* result = (_Table*) malloc(
+            sizeof(_Table) + (t1->ntuples * t2->ntuples) * get_tuple_size(t1->nattrs + t2->nattrs));
+    result->nattrs = t1->nattrs + t2->nattrs;
+    result->ntuples = 0;
 
     UINT t1_total_page = get_page_num(t1->nattrs, t1->ntuples);
     UINT t2_total_page = get_page_num(t2->nattrs, t2->ntuples);
 
-    if (get_conf()->buf_slots < t1_total_page + t2_total_page) {
-
-        UINT N = get_buffer_pool()->nbufs;
-        UINT cost1 = t1_total_page + ceil(t1_total_page / (double) (N - 1)) * t2_total_page;
-        UINT cost2 = t2_total_page + ceil(t2_total_page / (double) (N - 1)) * t1_total_page;
-        // compare the cost
-        bool flag = cost1 < cost2;
-        if (flag) {
-            result = block_nested_loop_join(idx1, idx2, t1, t2, flag);
+    if (t1_total_page > 0 && t2_total_page > 0) {
+        if (get_conf()->buf_slots < t1_total_page + t2_total_page) {
+            UINT N = get_buffer_pool()->nbufs;
+            UINT cost1 = t1_total_page + ceil(t1_total_page / (double) (N - 1)) * t2_total_page;
+            UINT cost2 = t2_total_page + ceil(t2_total_page / (double) (N - 1)) * t1_total_page;
+            // compare the cost
+            bool flag = cost1 < cost2;
+            if (flag) {
+                block_nested_loop_join(result, idx1, idx2, t1, t2, flag);
+            } else {
+                // transpose outer and inner
+                block_nested_loop_join(result,idx2, idx1, t2, t1, flag);
+            }
         } else {
-            // transpose outer and inner
-            result = block_nested_loop_join(idx2, idx1, t2, t1, flag);
+            simple_hash_join(result, idx1, idx2, t1, t2);
         }
-
-    } else {
-        result = simple_hash_join(idx1, idx2, t1, t2);
     }
 
     free(t1);

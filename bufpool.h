@@ -15,7 +15,7 @@ typedef struct buffer {
 
 typedef struct bufPool {
     UINT nbufs;
-    char* strategy;      // LRU, MRU, Cycle
+    char* strategy;
     int nhits;
     int nreads;
     UINT nvb;
