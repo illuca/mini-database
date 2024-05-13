@@ -161,7 +161,7 @@ Tuple merge_tuples(Tuple tuple1, Tuple tuple2, Table* t1, Table* t2) {
     return result;
 }
 
-void* simple_hash_join(_Table* result, UINT idx1, UINT idx2, Table* t1, Table* t2) {
+void simple_hash_join(_Table* result, UINT idx1, UINT idx2, Table* t1, Table* t2) {
     UINT buffer_size = get_buffer_pool()->nbufs;
     int buffer_count[buffer_size];
     INT t1_total_page = get_page_num(t1->nattrs, t1->ntuples), t2_total_page = get_page_num(t2->nattrs, t2->ntuples);
