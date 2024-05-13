@@ -35,8 +35,7 @@
 /cmake-build-debug/.cmake/api/v1/query/toolchains-v1
 /cmake-build-debug/.cmake/api/v1/reply/toolchains-v1-e1fea37869c35387c59a.json
 /.idea/vcs.xml
-/data/28
-/data/30
+**/data/*
 /cmake-build-debug/ass02
 /cmake-build-debug/CMakeFiles/ass02.dir/bufpool.c.o
 /cmake-build-debug/.cmake/api/v1/reply/codemodel-v2-4033c44e497f61608381.json
@@ -50,6 +49,7 @@
 /cmake-build-debug/.cmake/api/v1/reply/target-ass02-Debug-17e11971f4c525e3bea2.json
 /cmake-build-debug/.cmake/api/v1/reply/codemodel-v2-e5d30efb4887d66ac098.json
 /cmake-build-debug/CMakeFiles/ass02.dir/filepool.c.o
-/filepool.o
 /cmake-build-debug/.cmake/api/v1/reply/index-2023-04-14T11-29-20-0963.json
 /cmake-build-debug/.cmake/api/v1/reply/target-ass02-Debug-f09052ce1349a6440ca7.json
+**/*.o
+**/main
