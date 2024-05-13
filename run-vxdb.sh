@@ -18,3 +18,6 @@ valgrind ./main 50 5 1 CLS ./data ./test/test4/data_4.txt ./test/test4/query_4.t
 
 # mixed test 
 valgrind ./main 40 3 1 CLS ./data ./test/test5/data_5.txt ./test/test5/query_5.txt ./test/test5/log_5.txt
+
+rm ./*.o
+rm ./main
