@@ -1,5 +1,8 @@
 # Overview
-This project involves the implementation of a mini database management system as part of the coursework for a database systems course. The primary objective is to understand how data is organized within a DBMS and gain hands-on experience in implementing simple relational operators. The project specifically focuses on the `select` and `join` operations, which are fundamental to querying in any relational database system.
+- A PostgreSQL-like database with simple relational operators, including Select and Join, stored using fixed-size pages
+- Chose different join algorithms based on varying conditions: executing Nested Loop Join when there weren't enough buffer slots to hold both tables, otherwise executing Simple Hash Join, optimizing query efficiency
+- Managed a limited number of buffer slots using a clock scan algorithm, which handled real-world scenarios better than LRU
+- Balanced performance and memory growth by managing file handles and clock scan algorithms within the buffer pool
 
 ## Code structure
 
